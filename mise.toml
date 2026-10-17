@@ -1,0 +1,11 @@
+[tools]
+node = "26.12.0"
+"npm:cf" = "1.0.0-beta.18"
+"npm:skills" = "1.7.2"
+"pipx:chigwell/telegram-mcp" = "e0f4f9c16322d1446d25638adafcb0a6e5b221d6"
+pnpm = "12.14.0"
+prek = "0.5.5"
+
+[env]
+_.path = ["{{config_root}}/node_modules/.bin"]
+TELEGRAM_DEVICE_MODEL = "Piton-test-MCP"

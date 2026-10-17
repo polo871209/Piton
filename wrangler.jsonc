@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "piton",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [{ "pattern": "piton.lochingpo.com", "custom_domain": true }],
+  "durable_objects": {
+    "bindings": [{ "name": "PITON", "class_name": "Piton" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Piton"] }],
+  "vars": { "OWNER_TIMEZONE": "Asia/Kuala_Lumpur" },
+  "secrets": {
+    "required": [
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_WEBHOOK_SECRET",
+      "TELEGRAM_OWNER_ID"
+    ]
+  },
+  "minify": true,
+  "upload_source_maps": true,
+  "observability": { "enabled": true }
+}

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "cloudflare": {
+      "url": "https://mcp.cloudflare.com/mcp"
+    },
+    "telegram": {
+      "command": "mise",
+      "args": [
+        "exec",
+        "--",
+        "telegram-mcp"
+      ],
+      "env": {
+        "TELEGRAM_ALLOWED_CHAT_IDS": "8307508803",
+        "TELEGRAM_EXPOSED_TOOLS": "read-only+send_message,reply_to_message,press_inline_button"
+      }
+    }
+  }
+}
