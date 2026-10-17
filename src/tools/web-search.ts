@@ -1,5 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool } from "@earendil-works/pi-durable";
+import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
+import { callParallel, TransientError } from "../parallel";
 
 const RESULT_LIMIT = 5;
 const SNIPPET_CHARS = 1_000;
@@ -7,61 +8,33 @@ const PROVIDER_TIMEOUT_MS = 20_000;
 
 type SearchResult = { title: string; url: string; content: string };
 
-class TransientSearchError extends Error {}
-
 function assertOk(response: Response) {
   if (response.status === 429 || response.status >= 500) {
-    throw new TransientSearchError(`HTTP ${response.status}`);
+    throw new TransientError(`HTTP ${response.status}`);
   }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
 function isTransient(error: unknown) {
   return (
-    error instanceof TransientSearchError ||
+    error instanceof TransientError ||
     (error instanceof TypeError && /fetch|network|socket/i.test(error.message))
   );
 }
 
-type McpReply = {
-  result?: { content?: { type: string; text?: string }[]; isError?: boolean };
-  error?: { message?: string };
-};
-
-function eventStreamData(body: string) {
-  return body
-    .split("\n")
-    .find((line) => line.startsWith("data:"))
-    ?.slice("data:".length);
-}
-
-async function parallelSearch(query: string, signal: AbortSignal) {
-  const response = await fetch("https://search.parallel.ai/mcp", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params: {
-        name: "web_search",
-        arguments: { objective: query, search_queries: [query] },
-      },
-    }),
-    signal,
-  });
-  assertOk(response);
-  const body = await response.text();
-  const reply = JSON.parse(eventStreamData(body) ?? body) as McpReply;
-  if (reply.error) throw new Error(reply.error.message ?? "unknown error");
-  const text = reply.result?.content?.find((c) => c.type === "text")?.text;
-  if (!text || reply.result?.isError) throw new Error(text ?? "no content");
-  const { results = [] } = JSON.parse(text) as {
+async function parallelSearch(
+  query: string,
+  signal: AbortSignal,
+  conversationId: ConversationId,
+) {
+  const { results = [] } = await callParallel<{
     results?: { url?: string; title?: string; excerpts?: string[] }[];
-  };
+  }>(
+    "web_search",
+    { objective: query, search_queries: [query] },
+    conversationId,
+    signal,
+  );
   return results.flatMap((r): SearchResult[] =>
     r.url
       ? [
@@ -163,6 +136,7 @@ function uniqueResults(results: SearchResult[]) {
 async function searchWithRetry(
   provider: (typeof PROVIDERS)[number],
   query: string,
+  conversationId: ConversationId,
   callerSignal: AbortSignal | undefined,
 ) {
   for (let attempt = 1; ; attempt++) {
@@ -171,7 +145,9 @@ async function searchWithRetry(
       ? AbortSignal.any([callerSignal, timeout])
       : timeout;
     try {
-      return uniqueResults(await provider.search(query, signal));
+      return uniqueResults(
+        await provider.search(query, signal, conversationId),
+      );
     } catch (error) {
       if (attempt >= provider.attempts || !isTransient(error)) throw error;
       await scheduler.wait(500 + Math.random() * 250);
@@ -197,13 +173,14 @@ export const webSearchTool = defineTool({
     query: Type.String({ minLength: 1, maxLength: 400 }),
   }),
   replay: "safe",
-  async execute({ query }, _api, context) {
+  async execute({ query }, api, context) {
     const failures: string[] = [];
     for (const provider of PROVIDERS) {
       try {
         const results = await searchWithRetry(
           provider,
           query,
+          api.conversationId,
           context.abortSignal,
         );
         if (results.length > 0) {

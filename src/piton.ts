@@ -157,7 +157,7 @@ export class Piton extends DurableObject<Env> {
         await queueTurn(tx, this.#turnTask, {
           conversationId: job.conversationId as ConversationId,
           requestId: `job:${job.id}:${job.nextRunAt}`,
-          content: `Scheduled job ${job.id} is due. Do this now and reply with the result: ${job.instruction}`,
+          content: `Scheduled job ${job.id} is due. Do this now, then reply with the result in at most 5 lines: ${job.instruction}`,
           target: { bot: job.bot, chatId: owner },
           instructions: instructions.get(job.bot) ?? "",
         });
