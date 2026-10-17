@@ -10,6 +10,7 @@
     "bindings": [{ "name": "PITON", "class_name": "Piton" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Piton"] }],
+  "ai": { "binding": "AI" },
   "vars": { "OWNER_TIMEZONE": "Asia/Kuala_Lumpur" },
   "secrets": {
     "required": [

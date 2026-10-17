@@ -4,6 +4,7 @@ import type { MutableModels } from "@earendil-works/pi-ai/models";
 import type { InlineKeyboardMarkup } from "grammy/types";
 import {
   type ConversationId,
+  type UserInput,
   createRegistry,
   defineExtension,
   Harness,
@@ -18,6 +19,7 @@ import { assistantInstructions, MASTER_INSTRUCTIONS } from "./agent/prompts";
 import { createTurnTask, LOGIN_HINT, queueTurn } from "./agent/turn";
 
 import { Jobs, listJobs, nextRunAt } from "./jobs";
+import { messageInput } from "./telegram/attachments";
 import {
   type Message,
   registerBot,
@@ -155,7 +157,7 @@ export class Piton extends DurableObject<Env> {
         await queueTurn(tx, this.#turnTask, {
           conversationId: job.conversationId as ConversationId,
           requestId: `job:${job.id}:${job.nextRunAt}`,
-          text: `Scheduled job ${job.id} is due. Do this now and reply with the result: ${job.instruction}`,
+          content: `Scheduled job ${job.id} is due. Do this now and reply with the result: ${job.instruction}`,
           target: { bot: job.bot, chatId: owner },
           instructions: instructions.get(job.bot) ?? "",
         });
@@ -242,12 +244,11 @@ export class Piton extends DurableObject<Env> {
     }
 
     const message = update.message;
-    const text = message?.text;
-    if (!message || !text) return this.#markHandled(bot, update.update_id);
-
+    if (!message) return this.#markHandled(bot, update.update_id);
     const chatId = message.chat.id;
+    const text = message.text ?? "";
     const command = parseCommand(text);
-    if (!command && this.#submitLoginCode && bot === "main") {
+    if (text && !command && this.#submitLoginCode && bot === "main") {
       return this.#acceptLoginCode(message, text.trim(), update.update_id);
     }
     switch (command?.name) {
@@ -282,13 +283,20 @@ export class Piton extends DurableObject<Env> {
           helpText(bot === "main" ? MASTER_COMMANDS : ASSISTANT_COMMANDS),
         );
         return;
-      default:
+      default: {
+        const input = await messageInput(await this.#tokenFor(bot), message);
+        if (input === undefined) {
+          await this.#markHandled(bot, update.update_id);
+          await this.#reply(bot, chatId, "I read text, photos, and files.");
+          return;
+        }
         return this.#startTurn(
           conversationId,
           { bot, chatId },
-          text,
+          input,
           update.update_id,
         );
+      }
     }
   }
 
@@ -467,7 +475,7 @@ export class Piton extends DurableObject<Env> {
   async #startTurn(
     conversationId: ConversationId,
     target: ChatTarget,
-    text: string,
+    content: UserInput,
     updateId: number,
   ) {
     const instructions = await this.#instructionsFor(target.bot);
@@ -475,7 +483,7 @@ export class Piton extends DurableObject<Env> {
       await queueTurn(tx, this.#turnTask, {
         conversationId,
         requestId: `tg:${target.bot}:${updateId}`,
-        text,
+        content,
         target,
         instructions,
       });

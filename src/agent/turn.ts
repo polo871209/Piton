@@ -7,6 +7,7 @@ import {
   type EntryId,
   type TaskRuntime,
   type Tx,
+  type UserInput,
 } from "@earendil-works/pi-durable";
 import { type BotKey, ChatBot, type ChatTarget } from "../telegram/bots";
 import { sendReply } from "../telegram/api";
@@ -15,7 +16,7 @@ import { AGENT } from "./model";
 type TurnInput = {
   readonly conversationId: ConversationId;
   readonly requestId: string;
-  readonly text: string;
+  readonly content: UserInput;
   readonly target: ChatTarget;
 };
 
@@ -58,7 +59,7 @@ export function createTurnTask(tokenFor: (bot: BotKey) => Promise<string>) {
     initial: () => ({ phase: "answer" }),
     phases: {
       answer: async (task, runtime, context) => {
-        const { conversationId, requestId, text } = task.input;
+        const { conversationId, requestId, content } = task.input;
         const conversation = await runtime.conversation(
           conversationId,
           context,
@@ -67,7 +68,7 @@ export function createTurnTask(tokenFor: (bot: BotKey) => Promise<string>) {
           throw new Error(`Conversation ${conversationId} is missing`);
         }
         const submission = await conversation.submit(
-          { type: "input", content: text, requestId, whenBusy: "followUp" },
+          { type: "input", content, requestId, whenBusy: "followUp" },
           context,
         );
         const settled = await submission.wait(context);
@@ -124,7 +125,7 @@ export async function queueTurn(
   turn: {
     conversationId: ConversationId;
     requestId: string;
-    text: string;
+    content: UserInput;
     target: ChatTarget;
     instructions: string;
   },
