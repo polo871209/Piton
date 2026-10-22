@@ -45,7 +45,7 @@ import {
   MASTER_COMMANDS,
   parseCommand,
 } from "./telegram/commands";
-import { streamDrafts } from "./telegram/drafts";
+import { DraftStreams } from "./telegram/drafts";
 import { TOOLS } from "./tools";
 
 const TOKEN_REFRESH_MARGIN_MS = 15 * 60_000;
@@ -74,7 +74,10 @@ export class Piton extends DurableObject<Env> {
   #submitLoginCode?: (code: string) => void;
   #alarmUpdate: Promise<void> = Promise.resolve();
   readonly #alarmTaskWatches = new Set<TaskId>();
-  readonly #turnTask = createTurnTask((bot) => this.#tokenFor(bot));
+  readonly #turnTask = createTurnTask(
+    (bot) => this.#tokenFor(bot),
+    new DraftStreams(() => this.#harness),
+  );
   readonly #credentials = new PiCredentialStore(() => this.#harness);
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -490,17 +493,6 @@ export class Piton extends DurableObject<Env> {
       await markHandled(tx, target.bot, updateId);
     }, context);
     await this.#refreshAlarm();
-    void this.#tokenFor(target.bot)
-      .then((token) =>
-        streamDrafts(
-          this.#harness,
-          conversationId,
-          token,
-          target.chatId,
-          updateId,
-        ),
-      )
-      .catch((error) => console.error("Draft streaming failed", error));
   }
 
   #refreshAlarm(): Promise<void> {

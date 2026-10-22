@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { type BotKey, ChatBot, type ChatTarget } from "../telegram/bots";
 import { sendReply } from "../telegram/api";
+import type { DraftStreams } from "../telegram/drafts";
 import { AGENT } from "./model";
 
 type TurnInput = {
@@ -36,7 +37,8 @@ function unansweredText(reason: string, detail: unknown) {
 }
 
 type TurnState =
-  { phase: "answer" } | { phase: "send"; reply: string; attempt: number };
+  | { phase: "answer" }
+  | { phase: "send"; reply: string; attempt: number };
 
 async function answerText(
   runtime: TaskRuntime<TurnInput, TurnState, null, object>,
@@ -52,7 +54,10 @@ async function answerText(
   return text || "(empty answer)";
 }
 
-export function createTurnTask(tokenFor: (bot: BotKey) => Promise<string>) {
+export function createTurnTask(
+  tokenFor: (bot: BotKey) => Promise<string>,
+  drafts: DraftStreams,
+) {
   return defineTask<TurnInput, TurnState, null>({
     name: "piton.telegram-turn",
     version: 1,
@@ -67,11 +72,19 @@ export function createTurnTask(tokenFor: (bot: BotKey) => Promise<string>) {
         if (conversation === undefined) {
           throw new Error(`Conversation ${conversationId} is missing`);
         }
-        const submission = await conversation.submit(
-          { type: "input", content, requestId, whenBusy: "followUp" },
-          context,
+        const { bot, chatId } = task.input.target;
+        const release = drafts.hold(
+          conversationId,
+          await tokenFor(bot),
+          chatId,
         );
-        const settled = await submission.wait(context);
+        const settled = await conversation
+          .submit(
+            { type: "input", content, requestId, whenBusy: "followUp" },
+            context,
+          )
+          .then((submission) => submission.wait(context))
+          .finally(release);
         const reply =
           settled.status === "done" && settled.type === "input"
             ? await answerText(runtime, settled.answer, context)
