@@ -16,7 +16,8 @@
     "dev": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true wrangler dev",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "history": "node scripts/history.ts"
   },
   "dependencies": {
     "@earendil-works/chord": "1.4.0",

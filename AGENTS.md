@@ -23,6 +23,7 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 - A new secret goes in `secrets.required` in `wrangler.jsonc`, in `.mise.local.toml`, and through `wrangler secret put`.
 - Use Wrangler for the Worker, secrets, and logs. Use `cf` only for APIs Wrangler lacks, such as DNS.
 - To test egress from Cloudflare, such as whether a site blocks Workers, run a scratch Worker with `wrangler dev --remote`. Local `wrangler dev` uses your own IP.
+- To read the deployed chat history, run `pnpm history` to list conversations, then `pnpm history <id>` for one transcript. It refreshes `.wrangler/history.sqlite` for your own SQL queries.
 - To test the deployed bot, use the `telegram` MCP server. It acts as the owner in the chat with `@pitonguide_bot`.
 - After a change to `wrangler.jsonc`, run `pnpm types`. Done means `pnpm typecheck` passes.
 
