@@ -1,12 +1,17 @@
 import { Type } from "@earendil-works/pi-ai";
 import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
 import { env } from "cloudflare:workers";
+import { postingListed } from "../job-boards";
 import { callParallel } from "../parallel";
 
 const MAX_PAGE_CHARS = 20_000;
 const TIMEOUT_MS = 45_000;
+const USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+const CLOSED_NOTICE =
+  /no longer (?:available|accepting applications|open|active)|(?:job|position|posting|vacancy|role) (?:is |has been )?(?:closed|expired|filled|removed)|page (?:was )?not found|job not found/i;
 
-type Page = {
+type CachedPage = {
   url: string;
   title?: string;
   publish_date?: string | null;
@@ -14,57 +19,141 @@ type Page = {
   full_content?: string | null;
 };
 
-async function parallelFetch(
+type Status =
+  | { kind: "live"; html: string; contentType: string }
+  | { kind: "gone"; reason: string }
+  | { kind: "unknown"; reason: string };
+
+async function liveStatus(url: string, signal: AbortSignal): Promise<Status> {
+  try {
+    if ((await postingListed(url, signal)) === false) {
+      return { kind: "gone", reason: "not listed on the company's job board" };
+    }
+  } catch (error) {
+    if (signal.aborted) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      kind: "unknown",
+      reason: `could not read the job board: ${reason}`,
+    };
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { "user-agent": USER_AGENT },
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    return { kind: "unknown", reason: `could not reach the page: ${reason}` };
+  }
+  if (response.status === 404 || response.status === 410) {
+    return { kind: "gone", reason: `HTTP ${response.status}` };
+  }
+  if (!response.ok) {
+    return {
+      kind: "unknown",
+      reason: `HTTP ${response.status}, the site blocks direct reads`,
+    };
+  }
+  const html = await response.text();
+  const visibleText = html
+    .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ");
+  const notice = CLOSED_NOTICE.exec(visibleText)?.[0];
+  if (notice) return { kind: "gone", reason: `the page says "${notice}"` };
+  if (response.redirected && !sameDocument(url, response.url)) {
+    return {
+      kind: "unknown",
+      reason: `redirects to ${response.url}, often a sign that the posting closed`,
+    };
+  }
+  const contentType = response.headers.get("content-type") ?? "text/html";
+  return { kind: "live", html, contentType: contentType.split(";")[0]! };
+}
+
+function sameDocument(requested: string, final: string) {
+  const lastSegment = (url: string) =>
+    new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
+  return lastSegment(requested) === lastSegment(final);
+}
+
+async function cachedPages(
   urls: string[],
   objective: string,
   conversationId: ConversationId,
   signal: AbortSignal,
 ) {
-  const { results = [], errors = [] } = await callParallel<{
-    results?: Page[];
-    errors?: { url?: string; error_type?: string; content?: string }[];
-  }>("web_fetch", { urls, objective }, conversationId, signal);
-  const failed = errors.map(
-    (e) => `${e.url ?? "?"}: ${e.content ?? e.error_type ?? "failed"}`,
-  );
-  return { pages: results, failed };
+  try {
+    const { results = [] } = await callParallel<{ results?: CachedPage[] }>(
+      "web_fetch",
+      { urls, objective },
+      conversationId,
+      signal,
+    );
+    const byUrl = new Map(results.map((page) => [page.url, page]));
+    return urls.map(
+      (url, i) =>
+        byUrl.get(url) ??
+        (results.length === urls.length ? results[i] : undefined),
+    );
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return [];
+  }
 }
 
-async function directFetch(url: string, signal: AbortSignal): Promise<Page> {
-  const response = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    },
-    signal,
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const type = (response.headers.get("content-type") ?? "text/html").split(
-    ";",
-  )[0]!;
+async function toMarkdown(url: string, html: string, contentType: string) {
   const converted = await env.AI.toMarkdown({
     name: new URL(url).pathname.split("/").pop() || "page.html",
-    blob: new Blob([await response.arrayBuffer()], { type }),
+    blob: new Blob([html], { type: contentType }),
   });
-  if (converted.format === "error") throw new Error(converted.error);
-  return { url, full_content: converted.data };
+  return converted.format === "error" ? undefined : converted.data;
 }
 
-function formatPage(page: Page) {
+function cachedBody(page: CachedPage | undefined) {
+  if (!page) return undefined;
   const body = page.full_content ?? (page.excerpts ?? []).join("\n…\n");
-  const lines = [
+  return [
     page.title?.trim(),
-    page.url,
     page.publish_date ? `Published: ${page.publish_date}` : undefined,
-    body.slice(0, MAX_PAGE_CHARS),
-  ];
-  return lines.filter(Boolean).join("\n");
+    body,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function describePage(
+  url: string,
+  status: Status,
+  cached: CachedPage | undefined,
+) {
+  if (status.kind === "gone") {
+    return `${url}\nStatus: gone (${status.reason}). Do not share this link.`;
+  }
+  if (status.kind === "unknown") {
+    const body = cachedBody(cached);
+    return [
+      url,
+      `Status: unknown (${status.reason}). The page could not be confirmed live, so do not share this link as open.`,
+      body ? `Cached copy, possibly outdated:\n${body}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, MAX_PAGE_CHARS);
+  }
+  const body =
+    cachedBody(cached) ??
+    (await toMarkdown(url, status.html, status.contentType)) ??
+    "(no readable text)";
+  return `${url}\nStatus: live\n${body}`.slice(0, MAX_PAGE_CHARS);
 }
 
 export const fetchPageTool = defineTool({
   name: "fetch_page",
   description:
-    "Read web pages, such as a job posting, to check facts that search snippets do not show: whether it is still open, its posted date, and its requirements. Returns the parts of each page that match the objective.",
+    "Read web pages, such as a job posting, and check that each one is live now. Returns each page's status (live, gone, or unknown) and the parts that match the objective, such as its posted date and requirements. Search results can point to removed pages, so check every link with this tool before you share it.",
   parameters: Type.Object({
     urls: Type.Array(Type.String({ format: "uri" }), {
       minItems: 1,
@@ -82,36 +171,16 @@ export const fetchPageTool = defineTool({
     const signal = context.abortSignal
       ? AbortSignal.any([context.abortSignal, timeout])
       : timeout;
-    let pages: Page[] = [];
-    let failed: string[] = [];
-    try {
-      ({ pages, failed } = await parallelFetch(
-        urls,
-        objective,
-        api.conversationId,
-        signal,
-      ));
-    } catch (error) {
-      if (context.abortSignal?.aborted) throw error;
-      const read = await Promise.allSettled(
-        urls.map((url) => directFetch(url, signal)),
-      );
-      pages = read.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-      failed = read.flatMap((r, i) =>
-        r.status === "rejected"
-          ? [
-              `${urls[i]}: ${r.reason instanceof Error ? r.reason.message : r.reason}`,
-            ]
-          : [],
-      );
-    }
-    const text = [
-      ...pages.map(formatPage),
-      ...(failed.length > 0 ? [`Could not read:\n${failed.join("\n")}`] : []),
-    ].join("\n\n---\n\n");
+    const [statuses, cached] = await Promise.all([
+      Promise.all(urls.map((url) => liveStatus(url, signal))),
+      cachedPages(urls, objective, api.conversationId, signal),
+    ]);
+    const pages = await Promise.all(
+      urls.map((url, i) => describePage(url, statuses[i]!, cached[i])),
+    );
     return {
-      output: [{ type: "text", text }],
-      isError: pages.length === 0,
+      output: [{ type: "text", text: pages.join("\n\n---\n\n") }],
+      isError: statuses.every((status) => status.kind === "unknown"),
     };
   },
 });

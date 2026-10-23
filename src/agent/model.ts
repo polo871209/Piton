@@ -16,8 +16,8 @@ const LOGIN_CREDENTIAL_ONLY = {
 };
 
 export const AGENT: AgentChange = {
-  model: { provider: PROVIDER, modelId: "claude-sonnet-5-5" },
-  thinkingLevel: "high",
+  model: { provider: PROVIDER, modelId: "claude-opus-5-5" },
+  thinkingLevel: "medium",
   tools: TOOLS,
 };
 

@@ -1,96 +1,15 @@
 import { env } from "cloudflare:workers";
 import { Type } from "@earendil-works/pi-ai";
 import { defineDocFamily, defineTool } from "@earendil-works/pi-durable";
+import {
+  BoardNotFound,
+  type Opening,
+  PROVIDERS,
+  type Provider,
+} from "../job-boards";
 import { formatLocal } from "../time";
 
 const MAX_LISTED = 30;
-
-type Opening = { id: string; title: string; location: string; url: string };
-
-const PROVIDERS = {
-  Greenhouse: async (slug: string, signal: AbortSignal) => {
-    const body = await fetchBoard(
-      `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`,
-      signal,
-    );
-    const { jobs = [] } = body as {
-      jobs?: {
-        id: number;
-        title: string;
-        location?: { name?: string };
-        absolute_url: string;
-      }[];
-    };
-    return jobs.map((job): Opening => ({
-      id: String(job.id),
-      title: job.title,
-      location: job.location?.name ?? "",
-      url: job.absolute_url,
-    }));
-  },
-  Lever: async (slug: string, signal: AbortSignal) => {
-    const body = await fetchBoard(
-      `https://api.lever.co/v0/postings/${slug}?mode=json`,
-      signal,
-    );
-    return (
-      body as {
-        id: string;
-        text: string;
-        categories?: { location?: string };
-        hostedUrl: string;
-      }[]
-    ).map((job): Opening => ({
-      id: job.id,
-      title: job.text,
-      location: job.categories?.location ?? "",
-      url: job.hostedUrl,
-    }));
-  },
-  Ashby: async (slug: string, signal: AbortSignal) => {
-    const body = await fetchBoard(
-      `https://api.ashbyhq.com/posting-api/job-board/${slug}`,
-      signal,
-    );
-    const { jobs = [] } = body as {
-      jobs?: {
-        id: string;
-        title: string;
-        location?: string;
-        secondaryLocations?: { location?: string }[];
-        jobUrl: string;
-        isListed?: boolean;
-      }[];
-    };
-    return jobs
-      .filter((job) => job.isListed !== false)
-      .map((job): Opening => ({
-        id: job.id,
-        title: job.title.trim(),
-        location: [
-          job.location,
-          ...(job.secondaryLocations ?? []).map((l) => l.location),
-        ]
-          .filter(Boolean)
-          .join(" / "),
-        url: job.jobUrl,
-      }));
-  },
-};
-
-type Provider = keyof typeof PROVIDERS;
-
-class BoardNotFound extends Error {}
-
-async function fetchBoard(url: string, signal: AbortSignal) {
-  const response = await fetch(url, {
-    headers: { accept: "application/json" },
-    signal,
-  });
-  if (response.status === 404) throw new BoardNotFound();
-  if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
-  return response.json<unknown>();
-}
 
 const BOARD_URLS: [RegExp, Provider][] = [
   [
