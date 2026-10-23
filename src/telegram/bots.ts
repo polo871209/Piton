@@ -17,6 +17,7 @@ export const ChatBot = defineDoc<{ bot: BotKey | "" }>({
   history: "latest",
   fork: "current",
   initial: () => ({ bot: "" }),
+  checkpointWhen: () => true,
 });
 
 export const HandledUpdates = defineDocFamily<{ lastUpdateId: number }, null>({
@@ -25,6 +26,7 @@ export const HandledUpdates = defineDocFamily<{ lastUpdateId: number }, null>({
   version: 1,
   scope: "session",
   initial: () => ({ lastUpdateId: 0 }),
+  checkpointWhen: () => true,
 });
 
 export const Assistants = defineDocFamily<
@@ -48,6 +50,7 @@ export const Assistants = defineDocFamily<
     name: "",
     job: "",
   }),
+  checkpointWhen: () => true,
 });
 
 type PendingAssistant = { username: string; name: string; job: string };
@@ -57,6 +60,7 @@ export const PendingAssistants = defineDoc<{ requests: PendingAssistant[] }>({
   version: 1,
   scope: "session",
   initial: () => ({ requests: [] }),
+  checkpointWhen: () => true,
 });
 
 export function suggestedUsername(name: string) {

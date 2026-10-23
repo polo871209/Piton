@@ -11,6 +11,7 @@ const Credentials = defineDoc<{ byProvider: Record<string, JsonObject> }>({
   version: 1,
   scope: "session",
   initial: () => ({ byProvider: {} }),
+  checkpointWhen: () => true,
 });
 
 export class PiCredentialStore implements CredentialStore {

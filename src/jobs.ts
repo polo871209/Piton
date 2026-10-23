@@ -28,6 +28,7 @@ export const Jobs = defineDoc<{ jobs: Job[] }>({
   version: 1,
   scope: "session",
   initial: () => ({ jobs: [] }),
+  checkpointWhen: () => true,
 });
 
 export function nextRunAt(recurrence: Recurrence, after: number) {

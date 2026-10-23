@@ -145,6 +145,7 @@ const SeenOpenings = defineDocFamily<
   version: 1,
   scope: "session",
   initial: () => ({ ids: [], checkedAt: 0 }),
+  checkpointWhen: () => true,
 });
 
 function matches(opening: Opening, filter: string) {

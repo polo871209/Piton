@@ -104,12 +104,9 @@ export function createTurnTask(
           await sendReply(await tokenFor(bot), chatId, reply);
         } catch (error) {
           if (attempt >= MAX_SEND_ATTEMPTS) throw error;
-          await runtime.sleep(runtime.now() + 2 ** attempt * 1_000, context);
-          await runtime.commit(
-            () => ({
-              status: "running",
-              checkpoint: { phase: "send", reply, attempt: attempt + 1 },
-            }),
+          await runtime.sleepUntil(
+            runtime.now() + 2 ** attempt * 1_000,
+            { phase: "send", reply, attempt: attempt + 1 },
             context,
           );
           return;
