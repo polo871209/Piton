@@ -5,7 +5,8 @@ import { postingListed } from "../job-boards";
 import { callParallel } from "../parallel";
 
 const MAX_PAGE_CHARS = 20_000;
-const TIMEOUT_MS = 45_000;
+const LIVE_TIMEOUT_MS = 15_000;
+const CACHE_TIMEOUT_MS = 25_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const CLOSED_NOTICE =
@@ -24,30 +25,30 @@ type Status =
   | { kind: "gone"; reason: string }
   | { kind: "unknown"; reason: string };
 
-async function liveStatus(url: string, signal: AbortSignal): Promise<Status> {
+async function liveStatus(
+  url: string,
+  abort: AbortSignal | undefined,
+): Promise<Status> {
   try {
-    if ((await postingListed(url, signal)) === false) {
-      return { kind: "gone", reason: "not listed on the company's job board" };
-    }
+    return await checkLive(url, withTimeout(abort, LIVE_TIMEOUT_MS));
   } catch (error) {
-    if (signal.aborted) throw error;
-    const reason = error instanceof Error ? error.message : String(error);
-    return {
-      kind: "unknown",
-      reason: `could not read the job board: ${reason}`,
-    };
-  }
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: { "user-agent": USER_AGENT },
-      signal,
-    });
-  } catch (error) {
-    if (signal.aborted) throw error;
-    const reason = error instanceof Error ? error.message : String(error);
+    if (abort?.aborted) throw error;
+    const reason =
+      error instanceof Error && error.name === "TimeoutError"
+        ? `no answer within ${LIVE_TIMEOUT_MS / 1_000} seconds`
+        : String(error);
     return { kind: "unknown", reason: `could not reach the page: ${reason}` };
   }
+}
+
+async function checkLive(url: string, signal: AbortSignal): Promise<Status> {
+  if ((await postingListed(url, signal)) === false) {
+    return { kind: "gone", reason: "not listed on the company's job board" };
+  }
+  const response = await fetch(url, {
+    headers: { "user-agent": USER_AGENT },
+    signal,
+  });
   if (response.status === 404 || response.status === 410) {
     return { kind: "gone", reason: `HTTP ${response.status}` };
   }
@@ -73,6 +74,11 @@ async function liveStatus(url: string, signal: AbortSignal): Promise<Status> {
   return { kind: "live", html, contentType: contentType.split(";")[0]! };
 }
 
+const withTimeout = (abort: AbortSignal | undefined, ms: number) =>
+  abort
+    ? AbortSignal.any([abort, AbortSignal.timeout(ms)])
+    : AbortSignal.timeout(ms);
+
 function sameDocument(requested: string, final: string) {
   const lastSegment = (url: string) =>
     new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
@@ -83,14 +89,14 @@ async function cachedPages(
   urls: string[],
   objective: string,
   conversationId: ConversationId,
-  signal: AbortSignal,
+  abort: AbortSignal | undefined,
 ) {
   try {
     const { results = [] } = await callParallel<{ results?: CachedPage[] }>(
       "web_fetch",
       { urls, objective },
       conversationId,
-      signal,
+      withTimeout(abort, CACHE_TIMEOUT_MS),
     );
     const byUrl = new Map(results.map((page) => [page.url, page]));
     return urls.map(
@@ -99,17 +105,21 @@ async function cachedPages(
         (results.length === urls.length ? results[i] : undefined),
     );
   } catch (error) {
-    if (signal.aborted) throw error;
+    if (abort?.aborted) throw error;
     return [];
   }
 }
 
 async function toMarkdown(url: string, html: string, contentType: string) {
-  const converted = await env.AI.toMarkdown({
-    name: new URL(url).pathname.split("/").pop() || "page.html",
-    blob: new Blob([html], { type: contentType }),
-  });
-  return converted.format === "error" ? undefined : converted.data;
+  try {
+    const converted = await env.AI.toMarkdown({
+      name: new URL(url).pathname.split("/").pop() || "page.html",
+      blob: new Blob([html], { type: contentType }),
+    });
+    return converted.format === "error" ? undefined : converted.data;
+  } catch {
+    return undefined;
+  }
 }
 
 function cachedBody(page: CachedPage | undefined) {
@@ -167,13 +177,10 @@ export const fetchPageTool = defineTool({
   }),
   replay: "safe",
   async execute({ urls, objective }, api, context) {
-    const timeout = AbortSignal.timeout(TIMEOUT_MS);
-    const signal = context.abortSignal
-      ? AbortSignal.any([context.abortSignal, timeout])
-      : timeout;
+    const abort = context.abortSignal;
     const [statuses, cached] = await Promise.all([
-      Promise.all(urls.map((url) => liveStatus(url, signal))),
-      cachedPages(urls, objective, api.conversationId, signal),
+      Promise.all(urls.map((url) => liveStatus(url, abort))),
+      cachedPages(urls, objective, api.conversationId, abort),
     ]);
     const pages = await Promise.all(
       urls.map((url, i) => describePage(url, statuses[i]!, cached[i])),

@@ -25,6 +25,7 @@ function boardCandidates(board: string): [Provider, string][] {
     const slug = pattern.exec(board)?.[1];
     if (slug) return [[provider, slug]];
   }
+  if (URL.canParse(board)) return [["Teamtailor", new URL(board).host]];
   const words = board
     .toLowerCase()
     .split(/[^a-z0-9]+/)
@@ -81,7 +82,7 @@ const text = (value: string) => [{ type: "text" as const, text: value }];
 export const companyJobsTool = defineTool({
   name: "company_jobs",
   description:
-    "List the open roles on a company's job board and mark the roles that are new since the last check in this chat. Use it to watch a company for openings. LinkedIn cannot be read, so pass the company's Greenhouse, Lever, or Ashby board instead. If you do not know the board, try the company name, then find its careers page with web_search.",
+    "List the open roles on a company's job board and mark the roles that are new since the last check in this chat. Use it to watch a company for openings. LinkedIn cannot be read, so pass the company's Greenhouse, Lever, Ashby, or Teamtailor board instead. If you do not know the board, try the company name, then find its careers page with web_search.",
   parameters: Type.Object({
     board: Type.String({
       minLength: 1,
@@ -108,7 +109,7 @@ export const companyJobsTool = defineTool({
     if (!found) {
       return {
         output: text(
-          `No Greenhouse, Lever, or Ashby board found for "${board}". Find the company's careers page with web_search and pass the board URL it links to.`,
+          `No Greenhouse, Lever, Ashby, or Teamtailor board found for "${board}". Find the company's careers page with web_search and pass the board URL it links to.`,
         ),
         isError: true,
       };

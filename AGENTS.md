@@ -33,6 +33,6 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 
 - **`web_search`** — searches the web for news, prices, and other facts that change, and returns the top results with title, URL, and snippet.
 - **`fetch_page`** — reads web pages and reports whether each one is live now, before the model shares a link, plus what search snippets miss, such as a posting's date and requirements.
-- **`company_jobs`** — lists a company's open roles from its Greenhouse, Lever, or Ashby board and marks roles that are new since the last check in the chat, for watching a company for openings.
+- **`company_jobs`** — lists a company's open roles from its Greenhouse, Lever, Ashby, or Teamtailor board and marks roles that are new since the last check in the chat, for watching a company for openings.
 - **Attachments** — reads photos as images and PDF, Office, and text files as text, so the owner can send them as context.
 - **`schedule_job`, `list_jobs`, `cancel_job`** — create, list, and cancel recurring jobs of the current chat when the owner wants something done regularly, such as a morning briefing. `/jobs` lists them without the model.

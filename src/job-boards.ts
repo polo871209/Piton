@@ -74,6 +74,40 @@ export const PROVIDERS = {
         url: job.jobUrl,
       }));
   },
+  Teamtailor: async (site: string, signal: AbortSignal) => {
+    const host = site.includes(".") ? site : `${site}.teamtailor.com`;
+    const { items = [] } = (await fetchBoard(
+      `https://${host}/jobs.json`,
+      signal,
+    )) as {
+      items?: {
+        id: string;
+        title: string;
+        url: string;
+        _jobposting?: {
+          jobLocation?: {
+            address?: { addressLocality?: string; addressCountry?: string };
+          }[];
+          jobLocationType?: string;
+        };
+      }[];
+    };
+    return items.map((job): Opening => {
+      const posting = job._jobposting;
+      const places = (posting?.jobLocation ?? []).map(({ address }) =>
+        [address?.addressLocality, address?.addressCountry]
+          .filter(Boolean)
+          .join(", "),
+      );
+      if (posting?.jobLocationType === "TELECOMMUTE") places.push("Remote");
+      return {
+        id: job.id,
+        title: job.title.trim(),
+        location: places.filter(Boolean).join(" / "),
+        url: job.url,
+      };
+    });
+  },
 };
 
 export type Provider = keyof typeof PROVIDERS;
@@ -87,6 +121,9 @@ async function fetchBoard(url: string, signal: AbortSignal) {
   });
   if (response.status === 404) throw new BoardNotFound();
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+  if (!/json/.test(response.headers.get("content-type") ?? "")) {
+    throw new BoardNotFound();
+  }
   return response.json<unknown>();
 }
 
