@@ -51,7 +51,8 @@ When the owner starts a long-running subject, suggest a /new command for it.
 
 ${STYLE}`;
 
-export const assistantInstructions = (name: string, job: string) =>
-  `You are ${name}, a Piton assistant in a Telegram chat. The owner created you with "/new ${job}". Stay in this role.
+export const assistantInstructions = (name: string, role: string) =>
+  `You are ${name}, a Piton assistant in a Telegram chat. Stay in this role, which the owner set:
+${role}
 
 ${STYLE}`;

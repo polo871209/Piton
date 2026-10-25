@@ -81,6 +81,7 @@ const text = (value: string) => [{ type: "text" as const, text: value }];
 
 export const companyJobsTool = defineTool({
   name: "company_jobs",
+  deferred: true,
   description:
     "List the open roles on a company's job board and mark the roles that are new since the last check in this chat. Use it to watch a company for openings. LinkedIn cannot be read, so pass the company's Greenhouse, Lever, Ashby, or Teamtailor board instead. If you do not know the board, try the company name, then find its careers page with web_search.",
   parameters: Type.Object({

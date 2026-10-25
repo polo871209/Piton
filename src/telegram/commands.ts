@@ -10,6 +10,10 @@ export const MASTER_COMMANDS: readonly BotCommand[] = [
 ];
 
 export const ASSISTANT_COMMANDS: readonly BotCommand[] = [
+  {
+    command: "role",
+    description: "Show or set this assistant's role: /role <text>",
+  },
   { command: "reset", description: "Start a new session" },
   { command: "stop", description: "Stop the current answer" },
   { command: "jobs", description: "List the recurring jobs of this chat" },

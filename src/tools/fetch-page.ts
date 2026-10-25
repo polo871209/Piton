@@ -10,7 +10,21 @@ const CACHE_TIMEOUT_MS = 25_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const CLOSED_NOTICE =
-  /no longer (?:available|accepting applications|open|active)|(?:job|position|posting|vacancy|role) (?:is |has been )?(?:closed|expired|filled|removed)|page (?:was )?not found|job not found/i;
+  /no longer (?:available|accepting applications|open|active)|(?:job|position|posting|vacancy|role) (?:is |has been )?(?:closed|expired|filled|removed)|page (?:was )?not found|job not found|(?:page|job|posting|position)\b[\w ]{0,30}?(?:doesn['’]t|does not|no longer) exists?/i;
+const CURRENCY = String.raw`RM|MYR|S\$|SGD|US\$|USD|\$|€|EUR|£|GBP`;
+const AMOUNT = String.raw`(\d[\d,]*(?:\.\d+)?)\s?(k\b)?`;
+const SALARY = new RegExp(
+  String.raw`(?<![A-Za-z])(${CURRENCY})\s?${AMOUNT}(?:\s?(?:-|–|—|to)\s?(?:${CURRENCY})?\s?${AMOUNT})?`,
+  "gi",
+);
+const CURRENCY_CODES: Record<string, string> = {
+  rm: "MYR",
+  s$: "SGD",
+  us$: "USD",
+  $: "USD",
+  "€": "EUR",
+  "£": "GBP",
+};
 
 type CachedPage = {
   url: string;
@@ -134,6 +148,38 @@ function cachedBody(page: CachedPage | undefined) {
     .join("\n");
 }
 
+function pageStatus(live: Status, cached: CachedPage | undefined): Status {
+  if (live.kind === "gone") return live;
+  const notice = CLOSED_NOTICE.exec(cachedBody(cached) ?? "")?.[0];
+  return notice ? { kind: "gone", reason: `the page says "${notice}"` } : live;
+}
+
+function salaryValues(text: string) {
+  const values = new Set<string>();
+  for (const [, currency, low, lowK, high, highK] of text.matchAll(SALARY)) {
+    const from = amount(low!, lowK ?? highK);
+    const to = high ? amount(high, highK) : undefined;
+    if (from < 1_000) continue;
+    const code =
+      CURRENCY_CODES[currency!.toLowerCase()] ?? currency!.toUpperCase();
+    const range =
+      to && to !== from ? `${format(from)}-${format(to)}` : format(from);
+    values.add(`${code} ${range}`);
+  }
+  return [...values];
+}
+
+const amount = (digits: string, thousands: string | undefined) =>
+  Number(digits.replaceAll(",", "")) * (thousands ? 1_000 : 1);
+
+const format = (value: number) => value.toLocaleString("en-US");
+
+function salaryWarning(body: string) {
+  const values = salaryValues(body);
+  if (values.length < 2) return undefined;
+  return `Salary: the page states ${values.length} different salary values (${values.join("; ")}). They can belong to other listings on the page or be estimates, so do not give one as this role's salary unless the posting text ties it to this role.`;
+}
+
 async function describePage(
   url: string,
   status: Status,
@@ -142,28 +188,33 @@ async function describePage(
   if (status.kind === "gone") {
     return `${url}\nStatus: gone (${status.reason}). Do not share this link.`;
   }
-  if (status.kind === "unknown") {
-    const body = cachedBody(cached);
-    return [
-      url,
-      `Status: unknown (${status.reason}). The page could not be confirmed live, so do not share this link as open.`,
-      body ? `Cached copy, possibly outdated:\n${body}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, MAX_PAGE_CHARS);
-  }
   const body =
-    cachedBody(cached) ??
-    (await toMarkdown(url, status.html, status.contentType)) ??
-    "(no readable text)";
-  return `${url}\nStatus: live\n${body}`.slice(0, MAX_PAGE_CHARS);
+    status.kind === "live"
+      ? (cachedBody(cached) ??
+        (await toMarkdown(url, status.html, status.contentType)) ??
+        "(no readable text)")
+      : cachedBody(cached);
+  const statusLine =
+    status.kind === "live"
+      ? "Status: live"
+      : `Status: unknown (${status.reason}). The page could not be confirmed live, so do not share this link as open.`;
+  return [
+    url,
+    statusLine,
+    body && salaryWarning(body),
+    body && status.kind === "unknown"
+      ? `Cached copy, possibly outdated:\n${body}`
+      : body,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, MAX_PAGE_CHARS);
 }
 
 export const fetchPageTool = defineTool({
   name: "fetch_page",
   description:
-    "Read web pages, such as a job posting, and check that each one is live now. Returns each page's status (live, gone, or unknown) and the parts that match the objective, such as its posted date and requirements. Search results can point to removed pages, so check every link with this tool before you share it.",
+    "Read web pages, such as a job posting, and check that each one is live now. Returns each page's status (live, gone, or unknown) and the parts that match the objective, such as its posted date and requirements, and flags a page that states conflicting salary values. Search results can point to removed pages, so check every link with this tool before you share it.",
   parameters: Type.Object({
     urls: Type.Array(Type.String({ format: "uri" }), {
       minItems: 1,
@@ -182,12 +233,17 @@ export const fetchPageTool = defineTool({
       Promise.all(urls.map((url) => liveStatus(url, abort))),
       cachedPages(urls, objective, api.conversationId, abort),
     ]);
-    const pages = await Promise.all(
-      urls.map((url, i) => describePage(url, statuses[i]!, cached[i])),
+    const pages = urls.map((url, i) => ({
+      url,
+      status: pageStatus(statuses[i]!, cached[i]),
+      cached: cached[i],
+    }));
+    const described = await Promise.all(
+      pages.map((page) => describePage(page.url, page.status, page.cached)),
     );
     return {
-      output: [{ type: "text", text: pages.join("\n\n---\n\n") }],
-      isError: statuses.every((status) => status.kind === "unknown"),
+      output: [{ type: "text", text: described.join("\n\n---\n\n") }],
+      isError: pages.every((page) => page.status.kind === "unknown"),
     };
   },
 });

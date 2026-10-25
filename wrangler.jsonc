@@ -7,7 +7,14 @@
   "workers_dev": false,
   "routes": [{ "pattern": "piton.lochingpo.com", "custom_domain": true }],
   "durable_objects": {
-    "bindings": [{ "name": "PITON", "class_name": "Piton" }]
+    "bindings": [
+      { "name": "PITON", "class_name": "Piton" },
+      {
+        "name": "FRAME_CONTROL",
+        "class_name": "FrameControl",
+        "script_name": "frame-dashboard"
+      }
+    ]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Piton"] }],
   "ai": { "binding": "AI" },

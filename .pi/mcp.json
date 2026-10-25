@@ -5,13 +5,10 @@
     },
     "telegram": {
       "command": "mise",
-      "args": [
-        "exec",
-        "--",
-        "telegram-mcp"
-      ],
+      "args": ["exec", "--", "telegram-mcp"],
       "env": {
         "TELEGRAM_ALLOWED_CHAT_IDS": "8307508803",
+        "TELEGRAM_SESSION_LOCK": "shared",
         "TELEGRAM_EXPOSED_TOOLS": "read-only+send_message,reply_to_message,press_inline_button"
       }
     }

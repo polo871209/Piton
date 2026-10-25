@@ -7,7 +7,7 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 ## Design rules
 
 1. **Deterministic first.** If code, a regex, or a fixed branch can do the step, do not prompt the model.
-2. **Free by default.** A tool calls only free endpoints. Ask before adding anything billed per call. Cloudflare Web Search bills per search. Exa's free MCP, LinkedIn, and Workday block Worker traffic.
+2. **Free by default.** A tool calls only free endpoints. Ask before adding anything billed per call. Cloudflare Web Search bills per search. Exa's free MCP, LinkedIn, Workday, and Ant Group's careers API (`hrcareersweb.antgroup.com`) block Worker traffic.
 3. **Durable or nothing.** Work that must survive a restart runs as a Pi task in the `piton` extension, never as a dangling promise. App state, credentials included, goes through `harness.commit` and Pi documents, never `ctx.storage`.
 4. **Owner only.** Only `TELEGRAM_OWNER_ID` can reach an assistant. Never log or send a token. Log only expiry times and outcomes.
 5. **Say what, not how.** Model-facing tool descriptions and instructions state the capability and when to use it, never the mechanism.
@@ -18,6 +18,7 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 - Pin Pi packages exactly (`pnpm add -E`). Read their `.d.ts` files in `node_modules` before using an API. Reference: https://github.com/earendil-works/pi-durable-cloudflare.
 - Every Telegram update handler commits `markHandled` in the same Pi commit as its state change.
 - Put each model tool in its own file in `src/tools/` and add it to `TOOLS` in `src/tools/index.ts`. Shared logic that is not a tool, such as `src/jobs.ts`, stays outside `src/tools/`.
+- If only some chats need a tool, set `deferred: true` on it. Every chat starts without it, the model loads it with `tool_search` when a request needs it, and it stays loaded in that chat.
 - Set a tool's `replay: "safe"` only on reads and idempotent writes.
 - The Durable Object has one alarm. Add every deadline to `#refreshAlarm`, and never call `setAlarm` elsewhere.
 - A new secret goes in `secrets.required` in `wrangler.jsonc`, in `.mise.local.toml`, and through `wrangler secret put`.
@@ -32,7 +33,9 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 ### Tools for the model
 
 - **`web_search`** — searches the web for news, prices, and other facts that change, and returns the top results with title, URL, and snippet.
-- **`fetch_page`** — reads web pages and reports whether each one is live now, before the model shares a link, plus what search snippets miss, such as a posting's date and requirements.
-- **`company_jobs`** — lists a company's open roles from its Greenhouse, Lever, Ashby, or Teamtailor board and marks roles that are new since the last check in the chat, for watching a company for openings.
+- **`fetch_page`** — reads web pages and reports whether each one is live now, before the model shares a link, plus what search snippets miss, such as a posting's date and requirements, and flags a page that states conflicting salary values.
+- **`company_jobs`** — lists a company's open roles from its Greenhouse, Lever, Ashby, or Teamtailor board and marks roles that are new since the last check in the chat, for watching a company for openings. Loaded on demand.
+- **`photo_frame`** — turns the owner's wall photo frame screen on or off and reports whether it is on and online, when the owner asks to open or close the frame. Loaded on demand.
+- **`tool_search`** — loads an on-demand tool into the chat when a request needs it.
 - **Attachments** — reads photos as images and PDF, Office, and text files as text, so the owner can send them as context.
 - **`schedule_job`, `list_jobs`, `cancel_job`** — create, list, and cancel recurring jobs of the current chat when the owner wants something done regularly, such as a morning briefing. `/jobs` lists them without the model.

@@ -10,7 +10,8 @@ import {
 import { GrammyError, HttpError } from "grammy/web";
 import { sendDraft } from "./api";
 
-const DRAFT_INTERVAL_MS = 1_000;
+// Each draft is a subrequest, and Workers Free allows 50 per invocation.
+const DRAFT_INTERVAL_MS = 3_000;
 // Telegram drops a draft 30 seconds after its last update.
 const DRAFT_KEEPALIVE_MS = 20_000;
 

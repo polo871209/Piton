@@ -46,7 +46,7 @@ import {
   parseCommand,
 } from "./telegram/commands";
 import { DraftStreams } from "./telegram/drafts";
-import { TOOLS } from "./tools";
+import { LOADABLE_TOOLS, TOOLS } from "./tools";
 
 const TOKEN_REFRESH_MARGIN_MS = 15 * 60_000;
 const TOKEN_RETRY_DELAY_MS = 5 * 60_000;
@@ -100,6 +100,7 @@ export class Piton extends DurableObject<Env> {
             `Current time: ${kualaLumpurClock.format(new Date())} in Kuala Lumpur (UTC+8). The owner lives there, so give times in UTC+8.`,
           { tag: false },
         ),
+        LOADABLE_TOOLS,
       ],
     });
     const registry = createRegistry();
@@ -134,7 +135,9 @@ export class Piton extends DurableObject<Env> {
   }
 
   override async alarm() {
-    await this.#refreshToken();
+    await this.#refreshToken().catch((error: unknown) =>
+      console.error("Anthropic token refresh failed", errorText(error)),
+    );
     await this.#runDueJobs();
     await this.#refreshAlarm();
   }
@@ -263,6 +266,13 @@ export class Piton extends DurableObject<Env> {
         return bot === "main"
           ? this.#requestAssistant(chatId, command.argument, update.update_id)
           : this.#onlyInMaster(bot, chatId, "/new", update.update_id);
+      case "role":
+        if (bot !== "main") {
+          return this.#setRole(bot, chatId, command.argument, update.update_id);
+        }
+        await this.#markHandled(bot, update.update_id);
+        await this.#reply(bot, chatId, "Send /role in an assistant's chat.");
+        return;
       case "reset":
         return this.#reset(conversationId, bot, chatId, update.update_id);
       case "stop":
@@ -301,6 +311,27 @@ export class Piton extends DurableObject<Env> {
         );
       }
     }
+  }
+
+  async #setRole(
+    bot: ManagedBotId,
+    chatId: number,
+    role: string,
+    updateId: number,
+  ) {
+    const current = await this.#harness.commit(async (tx) => {
+      const assistant = await tx.doc(Assistants, bot, null);
+      if (role) assistant.job = role;
+      await markHandled(tx, bot, updateId);
+      return assistant.job;
+    }, context);
+    await this.#reply(
+      bot,
+      chatId,
+      role
+        ? "Role saved. It applies from your next message."
+        : `Current role:\n${current}\n\nChange it with /role <text>.`,
+    );
   }
 
   async #onlyInMaster(
@@ -548,7 +579,8 @@ export class Piton extends DurableObject<Env> {
       const current = await transaction.getAlarm();
       if (timestamp === undefined) {
         if (current !== null) await transaction.deleteAlarm();
-      } else if (current !== timestamp) {
+      } else if (current !== timestamp || timestamp <= Date.now()) {
+        // An alarm that exhausts its retries stays stored with its past time and never fires again.
         await transaction.setAlarm(timestamp);
         console.log("Alarm set for", new Date(timestamp).toISOString());
       }
