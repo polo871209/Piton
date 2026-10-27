@@ -1,7 +1,15 @@
 import { Type } from "@earendil-works/pi-ai";
 import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
 import { env } from "cloudflare:workers";
-import { postingListed } from "../job-boards";
+import { listedOpening } from "../job-boards";
+import {
+  closureNotice,
+  isBotChallenge,
+  jobPostingFacts,
+  leftPosting,
+  type PostingFacts,
+  visibleText,
+} from "../liveness";
 import { callParallel } from "../parallel";
 
 const MAX_PAGE_CHARS = 20_000;
@@ -9,8 +17,6 @@ const LIVE_TIMEOUT_MS = 15_000;
 const CACHE_TIMEOUT_MS = 25_000;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-const CLOSED_NOTICE =
-  /no longer (?:available|accepting applications|open|active)|(?:job|position|posting|vacancy|role) (?:is |has been )?(?:closed|expired|filled|removed)|page (?:was )?not found|job not found|(?:page|job|posting|position)\b[\w ]{0,30}?(?:doesn['’]t|does not|no longer) exists?/i;
 const CURRENCY = String.raw`RM|MYR|S\$|SGD|US\$|USD|\$|€|EUR|£|GBP`;
 const AMOUNT = String.raw`(\d[\d,]*(?:\.\d+)?)\s?(k\b)?`;
 const SALARY = new RegExp(
@@ -35,14 +41,20 @@ type CachedPage = {
 };
 
 type Status =
-  | { kind: "live"; html: string; contentType: string }
+  | {
+      kind: "live";
+      onBoard: boolean;
+      page?: { html: string; contentType: string };
+    }
   | { kind: "gone"; reason: string }
   | { kind: "unknown"; reason: string };
 
-async function liveStatus(
+type Checked = { status: Status; facts: PostingFacts };
+
+async function checkPage(
   url: string,
   abort: AbortSignal | undefined,
-): Promise<Status> {
+): Promise<Checked> {
   try {
     return await checkLive(url, withTimeout(abort, LIVE_TIMEOUT_MS));
   } catch (error) {
@@ -51,53 +63,90 @@ async function liveStatus(
       error instanceof Error && error.name === "TimeoutError"
         ? `no answer within ${LIVE_TIMEOUT_MS / 1_000} seconds`
         : String(error);
-    return { kind: "unknown", reason: `could not reach the page: ${reason}` };
+    return {
+      status: {
+        kind: "unknown",
+        reason: `could not reach the page: ${reason}`,
+      },
+      facts: {},
+    };
   }
 }
 
-async function checkLive(url: string, signal: AbortSignal): Promise<Status> {
-  if ((await postingListed(url, signal)) === false) {
-    return { kind: "gone", reason: "not listed on the company's job board" };
+async function checkLive(url: string, signal: AbortSignal): Promise<Checked> {
+  const opening = await listedOpening(url, signal);
+  if (opening === null) {
+    return {
+      status: { kind: "gone", reason: "not listed on the company's job board" },
+      facts: {},
+    };
   }
   const response = await fetch(url, {
     headers: { "user-agent": USER_AGENT },
     signal,
   });
+  const html = response.ok ? await response.text() : "";
+  const facts = jobPostingFacts(html);
+  if (opening?.postedOn) facts.postedOn = opening.postedOn;
+  const page = response.ok
+    ? {
+        html,
+        contentType: (response.headers.get("content-type") ?? "text/html")
+          .split(";")[0]!
+          .trim(),
+      }
+    : undefined;
+  if (opening) return { status: { kind: "live", onBoard: true, page }, facts };
+  return { status: pageStatus(url, response, page, facts), facts };
+}
+
+function pageStatus(
+  requested: string,
+  response: Response,
+  page: { html: string; contentType: string } | undefined,
+  facts: PostingFacts,
+): Status {
   if (response.status === 404 || response.status === 410) {
     return { kind: "gone", reason: `HTTP ${response.status}` };
   }
-  if (!response.ok) {
+  if (!page) {
+    const blocked = [401, 403, 429].includes(response.status);
     return {
       kind: "unknown",
-      reason: `HTTP ${response.status}, the site blocks direct reads`,
+      reason: `HTTP ${response.status}${blocked ? ", the site blocks direct reads" : ""}`,
     };
   }
-  const html = await response.text();
-  const visibleText = html
-    .replace(/<(script|style|noscript)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<[^>]*>/g, " ");
-  const notice = CLOSED_NOTICE.exec(visibleText)?.[0];
+  const text = visibleText(page.html);
+  if (isBotChallenge(text)) {
+    return {
+      kind: "unknown",
+      reason: "the site answered with an anti-bot check instead of the page",
+    };
+  }
+  const notice = closureNotice(text);
   if (notice) return { kind: "gone", reason: `the page says "${notice}"` };
-  if (response.redirected && !sameDocument(url, response.url)) {
+  if (response.redirected && leftPosting(requested, response.url)) {
     return {
       kind: "unknown",
       reason: `redirects to ${response.url}, often a sign that the posting closed`,
     };
   }
-  const contentType = response.headers.get("content-type") ?? "text/html";
-  return { kind: "live", html, contentType: contentType.split(";")[0]! };
+  if (
+    facts.closesOn &&
+    facts.closesOn < new Date().toISOString().slice(0, 10)
+  ) {
+    return {
+      kind: "unknown",
+      reason: `its closing date, ${facts.closesOn}, has passed`,
+    };
+  }
+  return { kind: "live", onBoard: false, page };
 }
 
 const withTimeout = (abort: AbortSignal | undefined, ms: number) =>
   abort
     ? AbortSignal.any([abort, AbortSignal.timeout(ms)])
     : AbortSignal.timeout(ms);
-
-function sameDocument(requested: string, final: string) {
-  const lastSegment = (url: string) =>
-    new URL(url).pathname.split("/").filter(Boolean).pop() ?? "";
-  return lastSegment(requested) === lastSegment(final);
-}
 
 async function cachedPages(
   urls: string[],
@@ -136,22 +185,32 @@ async function toMarkdown(url: string, html: string, contentType: string) {
   }
 }
 
-function cachedBody(page: CachedPage | undefined) {
+function cachedBody(page: CachedPage | undefined, facts: PostingFacts) {
   if (!page) return undefined;
   const body = page.full_content ?? (page.excerpts ?? []).join("\n…\n");
-  return [
-    page.title?.trim(),
-    page.publish_date ? `Published: ${page.publish_date}` : undefined,
-    body,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const published =
+    page.publish_date && !facts.postedOn
+      ? `Published: ${page.publish_date}`
+      : undefined;
+  return [page.title?.trim(), published, body].filter(Boolean).join("\n");
 }
 
-function pageStatus(live: Status, cached: CachedPage | undefined): Status {
-  if (live.kind === "gone") return live;
-  const notice = CLOSED_NOTICE.exec(cachedBody(cached) ?? "")?.[0];
-  return notice ? { kind: "gone", reason: `the page says "${notice}"` } : live;
+function withCachedNotice(status: Status, cached: CachedPage | undefined) {
+  if (status.kind === "gone" || (status.kind === "live" && status.onBoard)) {
+    return status;
+  }
+  const notice = closureNotice(cachedBody(cached, {}) ?? "");
+  return notice
+    ? { kind: "gone" as const, reason: `the page says "${notice}"` }
+    : status;
+}
+
+function factLines({ postedOn, closesOn, employer }: PostingFacts) {
+  return [
+    postedOn && `Posted: ${postedOn}`,
+    closesOn && `Closes: ${closesOn}`,
+    employer && `Employer: ${employer}`,
+  ];
 }
 
 function salaryValues(text: string) {
@@ -182,7 +241,7 @@ function salaryWarning(body: string) {
 
 async function describePage(
   url: string,
-  status: Status,
+  { status, facts }: Checked,
   cached: CachedPage | undefined,
 ) {
   if (status.kind === "gone") {
@@ -190,17 +249,19 @@ async function describePage(
   }
   const body =
     status.kind === "live"
-      ? (cachedBody(cached) ??
-        (await toMarkdown(url, status.html, status.contentType)) ??
+      ? (cachedBody(cached, facts) ??
+        (status.page &&
+          (await toMarkdown(url, status.page.html, status.page.contentType))) ??
         "(no readable text)")
-      : cachedBody(cached);
+      : cachedBody(cached, facts);
   const statusLine =
     status.kind === "live"
-      ? "Status: live"
+      ? `Status: live${status.onBoard ? " (listed on the company's job board)" : ""}`
       : `Status: unknown (${status.reason}). The page could not be confirmed live, so do not share this link as open.`;
   return [
     url,
     statusLine,
+    ...factLines(facts),
     body && salaryWarning(body),
     body && status.kind === "unknown"
       ? `Cached copy, possibly outdated:\n${body}`
@@ -214,7 +275,7 @@ async function describePage(
 export const fetchPageTool = defineTool({
   name: "fetch_page",
   description:
-    "Read web pages, such as a job posting, and check that each one is live now. Returns each page's status (live, gone, or unknown) and the parts that match the objective, such as its posted date and requirements, and flags a page that states conflicting salary values. Search results can point to removed pages, so check every link with this tool before you share it.",
+    "Read web pages, such as a job posting, and check that each one is live now. Returns each page's status (live, gone, or unknown), the posting's posted date, closing date, and employer when the page states them, and the parts that match the objective, such as its requirements, and flags a page that states conflicting salary values. Search results can point to removed pages, so check every link with this tool before you share it.",
   parameters: Type.Object({
     urls: Type.Array(Type.String({ format: "uri" }), {
       minItems: 1,
@@ -229,21 +290,24 @@ export const fetchPageTool = defineTool({
   replay: "safe",
   async execute({ urls, objective }, api, context) {
     const abort = context.abortSignal;
-    const [statuses, cached] = await Promise.all([
-      Promise.all(urls.map((url) => liveStatus(url, abort))),
+    const [checked, cached] = await Promise.all([
+      Promise.all(urls.map((url) => checkPage(url, abort))),
       cachedPages(urls, objective, api.conversationId, abort),
     ]);
     const pages = urls.map((url, i) => ({
       url,
-      status: pageStatus(statuses[i]!, cached[i]),
+      checked: {
+        ...checked[i]!,
+        status: withCachedNotice(checked[i]!.status, cached[i]),
+      },
       cached: cached[i],
     }));
     const described = await Promise.all(
-      pages.map((page) => describePage(page.url, page.status, page.cached)),
+      pages.map((page) => describePage(page.url, page.checked, page.cached)),
     );
     return {
       output: [{ type: "text", text: described.join("\n\n---\n\n") }],
-      isError: pages.every((page) => page.status.kind === "unknown"),
+      isError: pages.every((page) => page.checked.status.kind === "unknown"),
     };
   },
 });

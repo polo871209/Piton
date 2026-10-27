@@ -1,6 +1,10 @@
 import { env } from "cloudflare:workers";
 import { Type } from "@earendil-works/pi-ai";
-import { defineDocFamily, defineTool } from "@earendil-works/pi-durable";
+import {
+  defineDoc,
+  defineDocFamily,
+  defineTool,
+} from "@earendil-works/pi-durable";
 import {
   BoardNotFound,
   type Opening,
@@ -18,43 +22,83 @@ const BOARD_URLS: [RegExp, Provider][] = [
   ],
   [/jobs\.(?:eu\.)?lever\.co\/([\w-]+)/i, "Lever"],
   [/jobs\.ashbyhq\.com\/([\w.-]+)/i, "Ashby"],
+  [/(?:careers|jobs)\.smartrecruiters\.com\/([\w-]+)/i, "SmartRecruiters"],
+  [/apply\.workable\.com\/(?!j\/|api\/)([\w-]+)/i, "Workable"],
+  [/\/\/([\w-]+)\.recruitee\.com/i, "Recruitee"],
+  [/\/\/([\w-]+)\.breezy\.hr/i, "Breezy"],
 ];
 
-function boardCandidates(board: string): [Provider, string][] {
+type Board = { provider: Provider; slug: string };
+
+function boardFromUrl(board: string): Board | undefined {
   for (const [pattern, provider] of BOARD_URLS) {
     const slug = pattern.exec(board)?.[1];
-    if (slug) return [[provider, slug]];
+    if (slug) return { provider, slug };
   }
-  if (URL.canParse(board)) return [["Teamtailor", new URL(board).host]];
-  const words = board
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  const names = new Set([words.join("-"), words.join("")]);
-  return [...names]
-    .filter(Boolean)
-    .flatMap((name) =>
-      (Object.keys(PROVIDERS) as Provider[]).map((p): [Provider, string] => [
-        p,
-        name,
-      ]),
-    );
-}
-
-async function findBoard(board: string, signal: AbortSignal) {
-  for (const [provider, slug] of boardCandidates(board)) {
-    try {
-      return {
-        provider,
-        slug,
-        openings: await PROVIDERS[provider](slug, signal),
-      };
-    } catch (error) {
-      if (!(error instanceof BoardNotFound)) throw error;
-    }
+  if (URL.canParse(board)) {
+    return { provider: "Teamtailor", slug: new URL(board).host };
   }
   return undefined;
 }
+
+function guessedBoards(name: string): Board[] {
+  const words = name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const slugs = [...new Set([words.join("-"), words.join("")])].filter(Boolean);
+  return slugs.flatMap((slug) =>
+    (Object.keys(PROVIDERS) as Provider[]).map((provider) => ({
+      provider,
+      slug,
+    })),
+  );
+}
+
+async function readBoard(board: Board, signal: AbortSignal) {
+  return {
+    ...board,
+    openings: await PROVIDERS[board.provider](board.slug, signal),
+  };
+}
+
+async function firstBoardFound(boards: Board[], signal: AbortSignal) {
+  const results = await Promise.allSettled(
+    boards.map((board) => readBoard(board, signal)),
+  );
+  const found = results.flatMap((r) =>
+    r.status === "fulfilled" ? [r.value] : [],
+  );
+  const failure = results.find(
+    (r): r is PromiseRejectedResult =>
+      r.status === "rejected" && !(r.reason instanceof BoardNotFound),
+  );
+  const best = found.find((b) => b.openings.length > 0) ?? found[0];
+  if (!best && failure) throw failure.reason;
+  return best;
+}
+
+async function findBoard(
+  board: string,
+  known: Board | undefined,
+  signal: AbortSignal,
+) {
+  const direct = boardFromUrl(board);
+  if (direct) return firstBoardFound([direct], signal);
+  if (known) {
+    const found = await firstBoardFound([known], signal);
+    if (found) return found;
+  }
+  return firstBoardFound(guessedBoards(board), signal);
+}
+
+const KnownBoards = defineDoc<{ boards: Record<string, Board> }>({
+  kind: "piton.known-boards",
+  version: 1,
+  scope: "session",
+  initial: () => ({ boards: {} }),
+  checkpointWhen: () => true,
+});
 
 const SeenOpenings = defineDocFamily<
   { ids: string[]; checkedAt: number },
@@ -68,14 +112,22 @@ const SeenOpenings = defineDocFamily<
   checkpointWhen: () => true,
 });
 
-function matches(opening: Opening, filter: string) {
+function matches(opening: Opening, filter: string, exclude: string) {
   const haystack = `${opening.title} ${opening.location}`.toLowerCase();
-  return filter
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .every((word) => haystack.includes(word));
+  const titleWords = words(opening.title.replace(/[^\p{L}\p{N}]+/gu, " "));
+  return (
+    words(filter).every((word) => haystack.includes(word)) &&
+    !words(exclude).some((word) => titleWords.some((t) => t.startsWith(word)))
+  );
 }
+
+const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean);
+
+const describeOpening = (o: Opening, isNew: boolean) =>
+  `${isNew ? "NEW " : ""}${o.title}${o.location ? ` (${o.location})` : ""}${o.postedOn ? `, posted ${o.postedOn}` : ""} ${o.url}`;
+
+const newestFirst = (a: Opening, b: Opening) =>
+  (b.postedOn ?? "").localeCompare(a.postedOn ?? "");
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 
@@ -83,7 +135,7 @@ export const companyJobsTool = defineTool({
   name: "company_jobs",
   deferred: true,
   description:
-    "List the open roles on a company's job board and mark the roles that are new since the last check in this chat. Use it to watch a company for openings. LinkedIn cannot be read, so pass the company's Greenhouse, Lever, Ashby, or Teamtailor board instead. If you do not know the board, try the company name, then find its careers page with web_search.",
+    "List the open roles on a company's job board, with posted dates, and mark the roles that are new since the last check in this chat. After the first check in a chat, it lists only new roles in full. Use it to watch a company for openings. LinkedIn cannot be read, so pass the company's Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, Breezy, or Teamtailor board instead. If you do not know the board, try the company name, then find its careers page with web_search.",
   parameters: Type.Object({
     board: Type.String({
       minLength: 1,
@@ -96,9 +148,25 @@ export const companyJobsTool = defineTool({
           'Words that every listed role must contain in its title or location, such as "engineer kuala lumpur".',
       }),
     ),
+    exclude: Type.Optional(
+      Type.String({
+        description:
+          'Words that drop a role if its title contains any of them, such as "lead manager principal".',
+      }),
+    ),
+    all: Type.Optional(
+      Type.Boolean({
+        description:
+          "List every matching role with its link, also roles seen in earlier checks.",
+      }),
+    ),
   }),
   replay: "safe",
-  async execute({ board, filter = "" }, api, context) {
+  async execute(
+    { board, filter = "", exclude = "", all = false },
+    api,
+    context,
+  ) {
     const earlier = await api.memo<string>("output", context);
     if (earlier !== undefined) return { output: text(earlier) };
 
@@ -106,11 +174,13 @@ export const companyJobsTool = defineTool({
       AbortSignal.timeout(30_000),
       ...(context.abortSignal ? [context.abortSignal] : []),
     ]);
-    const found = await findBoard(board, signal);
+    const name = board.trim().toLowerCase();
+    const known = (await api.snapshot(KnownBoards, context))?.boards[name];
+    const found = await findBoard(board, known, signal);
     if (!found) {
       return {
         output: text(
-          `No Greenhouse, Lever, Ashby, or Teamtailor board found for "${board}". Find the company's careers page with web_search and pass the board URL it links to.`,
+          `No Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Recruitee, Breezy, or Teamtailor board found for "${board}". Find the company's careers page with web_search and pass the board URL it links to.`,
         ),
         isError: true,
       };
@@ -122,38 +192,57 @@ export const companyJobsTool = defineTool({
     const seenIds = new Set(seen?.ids ?? []);
     const isNew = (o: Opening) => !firstCheck && !seenIds.has(o.id);
 
-    const listed = openings
-      .filter((o) => matches(o, filter))
-      .sort((a, b) => Number(isNew(b)) - Number(isNew(a)));
-    const newCount = listed.filter(isNew).length;
-    const scope = filter ? ` matching "${filter}"` : "";
+    const matching = openings
+      .filter((o) => matches(o, filter, exclude))
+      .sort(newestFirst);
+    const fresh = matching.filter(isNew);
+    const older = matching.filter((o) => !isNew(o));
+    const listed = firstCheck || all ? [...fresh, ...older] : fresh;
+    const scope = [
+      filter && `matching "${filter}"`,
+      exclude && `without "${exclude}"`,
+    ]
+      .filter(Boolean)
+      .map((part) => ` ${part}`)
+      .join(",");
     const header = [
-      `${provider} board ${slug}: ${listed.length} of ${openings.length} open roles${scope}.`,
+      `${provider} board ${slug}: ${matching.length} of ${openings.length} open roles${scope}.`,
       firstCheck
-        ? "First check in this chat. Later checks mark new roles."
-        : `${newCount} new since ${formatLocal(seen.checkedAt, env.OWNER_TIMEZONE)}.`,
+        ? "First check in this chat. Later checks list only new roles."
+        : `${fresh.length} new since ${formatLocal(seen.checkedAt, env.OWNER_TIMEZONE)}.`,
     ].join(" ");
     const lines = listed
       .slice(0, MAX_LISTED)
-      .map(
-        (o) =>
-          `${isNew(o) ? "NEW " : ""}${o.title}${o.location ? ` (${o.location})` : ""} ${o.url}`,
-      );
+      .map((o) => describeOpening(o, isNew(o)));
     const more =
       listed.length > MAX_LISTED
         ? [
             `${MAX_LISTED} of ${listed.length} shown. Narrow the filter to see the rest.`,
           ]
         : [];
+    const stillOpen =
+      firstCheck || all || older.length === 0
+        ? []
+        : [
+            `Still open from earlier checks: ${older
+              .slice(0, MAX_LISTED)
+              .map((o) => o.title)
+              .join(
+                "; ",
+              )}${older.length > MAX_LISTED ? `; and ${older.length - MAX_LISTED} more` : ""}. Set all to list them with links.`,
+          ];
     const output = await api.memo(
       "output",
-      [header, ...lines, ...more].join("\n"),
+      [header, ...lines, ...more, ...stillOpen].join("\n"),
       context,
     );
     await api.commit(async (tx) => {
       const doc = await tx.doc(SeenOpenings, key, null);
       doc.ids = openings.map((o) => o.id);
       doc.checkedAt = Date.now();
+      if (!boardFromUrl(board)) {
+        (await tx.doc(KnownBoards)).boards[name] = { provider, slug };
+      }
     }, context);
     return { output: text(output) };
   },

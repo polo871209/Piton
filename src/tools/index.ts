@@ -2,6 +2,7 @@ import { section } from "@earendil-works/pi-durable";
 import { createToolSearchTool } from "@earendil-works/pi-durable/tool-search";
 import { companyJobsTool } from "./company-jobs";
 import { fetchPageTool } from "./fetch-page";
+import { jobTrackerTool } from "./job-tracker";
 import { photoFrameTool } from "./photo-frame";
 import { cancelJobTool, listJobsTool, scheduleJobTool } from "./schedule";
 import { webSearchTool } from "./web-search";
@@ -14,6 +15,7 @@ export const TOOLS = [
   cancelJobTool,
   createToolSearchTool(),
   companyJobsTool,
+  jobTrackerTool,
   photoFrameTool,
 ];
 

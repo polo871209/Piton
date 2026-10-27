@@ -1,7 +1,5 @@
 # Piton
 
-<!-- AGENT: when adding, removing, or materially changing a model tool, update its bullet here. One bullet per item: capability and when it applies, in one concise clause. Omit implementation details. -->
-
 Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/earendil-works/pi-durable-cloudflare): one Cloudflare Worker, one Durable Object, and one bot per assistant.
 
 ## Design rules
@@ -28,14 +26,3 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 - To test the deployed bot, use the `telegram` MCP server. It acts as the owner in the chat with `@pitonguide_bot`.
 - After a change to `wrangler.jsonc`, run `pnpm types`. Done means `pnpm typecheck` passes.
 
-## What the assistants can do
-
-### Tools for the model
-
-- **`web_search`** — searches the web for news, prices, and other facts that change, and returns the top results with title, URL, and snippet.
-- **`fetch_page`** — reads web pages and reports whether each one is live now, before the model shares a link, plus what search snippets miss, such as a posting's date and requirements, and flags a page that states conflicting salary values.
-- **`company_jobs`** — lists a company's open roles from its Greenhouse, Lever, Ashby, or Teamtailor board and marks roles that are new since the last check in the chat, for watching a company for openings. Loaded on demand.
-- **`photo_frame`** — turns the owner's wall photo frame screen on or off and reports whether it is on and online, when the owner asks to open or close the frame. Loaded on demand.
-- **`tool_search`** — loads an on-demand tool into the chat when a request needs it.
-- **Attachments** — reads photos as images and PDF, Office, and text files as text, so the owner can send them as context.
-- **`schedule_job`, `list_jobs`, `cancel_job`** — create, list, and cancel recurring jobs of the current chat when the owner wants something done regularly, such as a morning briefing. `/jobs` lists them without the model.
