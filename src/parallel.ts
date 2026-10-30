@@ -1,5 +1,5 @@
 import type { ConversationId } from "@earendil-works/pi-durable";
-import { assertOk } from "./web";
+import { assertOk, TransientError } from "./web";
 
 type McpReply = {
   result?: { content?: { type: string; text?: string }[]; isError?: boolean };
@@ -53,6 +53,11 @@ export async function callParallel<Result>(
   const reply = JSON.parse(eventStreamData(body) ?? body) as McpReply;
   if (reply.error) throw new Error(reply.error.message ?? "unknown error");
   const text = reply.result?.content?.find((c) => c.type === "text")?.text;
-  if (!text || reply.result?.isError) throw new Error(text ?? "no content");
+  if (!text || reply.result?.isError) {
+    const message = text ?? "no content";
+    throw /rate limit/i.test(message)
+      ? new TransientError(message)
+      : new Error(message);
+  }
   return JSON.parse(text) as Result;
 }

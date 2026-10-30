@@ -10,7 +10,6 @@ import {
 import { errorText } from "../errors";
 import { sendDraft } from "./api";
 
-// Each draft is a subrequest, and Workers Free allows 50 per invocation.
 const DRAFT_INTERVAL_MS = 3_000;
 // Telegram drops a draft 30 seconds after its last update.
 const DRAFT_KEEPALIVE_MS = 20_000;

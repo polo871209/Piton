@@ -1,9 +1,13 @@
+import { routeFetchThroughEgress } from "./egress";
 import { errorText } from "./errors";
 import { registerBot, sendReply, type Update } from "./telegram/api";
 import type { BotKey } from "./telegram/bots";
 import { MASTER_COMMANDS } from "./telegram/commands";
 
+export { Egress } from "./egress";
 export { Piton } from "./piton";
+
+routeFetchThroughEgress();
 
 function secretMatches(given: string | null, expected: string | undefined) {
   if (!given || !expected) return false;

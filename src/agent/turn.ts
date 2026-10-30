@@ -28,11 +28,11 @@ export const LOGIN_HINT =
 const AUTH_ERROR =
   /not configured|no api key|authentication_error|invalid_grant|oauth|\b401\b|unauthorized/i;
 
-function unansweredText(reason: string, detail: unknown) {
+function failureText(reason: string, detail: unknown) {
   const text = `${reason} ${JSON.stringify(detail ?? "")}`;
   if (AUTH_ERROR.test(text))
     return `Claude is not signed in, or it rejected the login. ${LOGIN_HINT}`;
-  return `(no answer: ${reason})`;
+  return `I stopped before finishing: ${reason}`;
 }
 
 type TurnState =
@@ -46,14 +46,14 @@ async function answerText(
 ) {
   const entry = await runtime.entry(answer, context);
   const message = entry?.model?.[0];
-  const text =
-    message?.role === "assistant"
-      ? message.content
-          .flatMap((part) => (part.type === "text" ? [part.text] : []))
-          .join("\n")
-          .trim()
-      : "";
-  return text || "(empty answer)";
+  if (message?.role !== "assistant") return "(empty answer)";
+  const text = message.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim();
+  if (message.stopReason !== "error") return text || "(empty answer)";
+  const failure = failureText(message.errorMessage ?? "model error", null);
+  return text ? `${text}\n\n${failure}` : failure;
 }
 
 export function createTurnTask(
@@ -90,7 +90,7 @@ export function createTurnTask(
         const reply =
           settled.status === "done" && settled.type === "input"
             ? await answerText(runtime, settled.answer, context)
-            : unansweredText(settled.reason ?? settled.status, settled.detail);
+            : failureText(settled.reason ?? settled.status, settled.detail);
         await runtime.commit(
           () => ({
             status: "running",

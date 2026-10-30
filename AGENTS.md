@@ -5,7 +5,7 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 ## Design rules
 
 1. **Deterministic first.** If code, a regex, or a fixed branch can do the step, do not prompt the model.
-2. **Free by default.** A tool calls only free endpoints. Ask before adding anything billed per call. Cloudflare Web Search bills per search. Exa's free MCP, LinkedIn, Workday, and Ant Group's careers API (`hrcareersweb.antgroup.com`) block Worker traffic.
+2. **Free by default.** A tool calls only free endpoints. Ask before adding anything billed per call. Cloudflare Web Search bills per search. Exa's free MCP, DuckDuckGo, LinkedIn, Workday, and Ant Group's careers API (`hrcareersweb.antgroup.com`) block Worker traffic.
 3. **Durable or nothing.** Work that must survive a restart runs as a Pi task in the `piton` extension, never as a dangling promise. App state, credentials included, goes through `harness.commit` and Pi documents, never `ctx.storage`.
 4. **Owner only.** Only `TELEGRAM_OWNER_ID` can reach an assistant. Never log or send a token. Log only expiry times and outcomes.
 5. **Say what, not how.** Model-facing tool descriptions and instructions state the capability and when to use it, never the mechanism.

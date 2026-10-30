@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { Type } from "@earendil-works/pi-ai";
 import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
+import { errorText } from "../errors";
 import { listedOpening } from "../job-boards";
 import {
   closureNotice,
@@ -159,6 +160,7 @@ async function cachedPages(
     return urls.map((url) => byPage.get(pageKey(url)));
   } catch (error) {
     if (abort?.aborted) throw error;
+    console.error("Parallel web_fetch failed", errorText(error));
     return [];
   }
 }
@@ -169,10 +171,25 @@ async function toMarkdown(url: string, html: string, contentType: string) {
       name: new URL(url).pathname.split("/").pop() || "page.html",
       blob: new Blob([html], { type: contentType }),
     });
-    return converted.format === "error" ? undefined : converted.data;
-  } catch {
-    return undefined;
+    if (converted.format !== "error") return converted.data;
+    console.error("toMarkdown failed", url, converted.error);
+  } catch (error) {
+    console.error("toMarkdown failed", url, errorText(error));
   }
+  return undefined;
+}
+
+async function pageText(
+  url: string,
+  page: { html: string; contentType: string },
+) {
+  const markdown = await toMarkdown(url, page.html, page.contentType);
+  if (markdown?.trim()) return markdown;
+  const text = visibleText(page.html)
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+  return text || undefined;
 }
 
 function cachedBody(page: CachedPage | undefined, facts: PostingFacts) {
@@ -240,8 +257,7 @@ async function describePage(
   const body =
     status.kind === "live"
       ? (cachedBody(cached, facts) ??
-        (status.page &&
-          (await toMarkdown(url, status.page.html, status.page.contentType))) ??
+        (status.page && (await pageText(url, status.page))) ??
         "(no readable text)")
       : cachedBody(cached, facts);
   const statusLine =

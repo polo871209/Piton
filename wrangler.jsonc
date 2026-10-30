@@ -3,7 +3,7 @@
   "name": "piton",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-16",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_ctx_exports"],
   "workers_dev": false,
   "routes": [{ "pattern": "piton.lochingpo.com", "custom_domain": true }],
   "durable_objects": {
