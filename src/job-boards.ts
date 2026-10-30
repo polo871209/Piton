@@ -36,9 +36,13 @@ export const PROVIDERS = {
     );
   },
   Lever: async (slug: string, signal: AbortSignal) => {
-    const body = await fetchBoard(
-      `https://api.lever.co/v0/postings/${slug}?mode=json`,
-      signal,
+    const path = `/v0/postings/${slug}?mode=json`;
+    // Lever's EU deployment is separate, and the US API answers 404 for its boards.
+    const body = await fetchBoard(`https://api.lever.co${path}`, signal).catch(
+      (error: unknown) => {
+        if (!(error instanceof BoardNotFound)) throw error;
+        return fetchBoard(`https://api.eu.lever.co${path}`, signal);
+      },
     );
     return (
       body as {
@@ -299,18 +303,20 @@ function embeddedGreenhouseAddress(url: string): PostingAddress | undefined {
 
 /**
  * The board entry of a posting URL from a supported job board, or a company page that embeds a Greenhouse posting.
- * Null if the board no longer lists the posting. Undefined if the URL belongs to no known board.
+ * Null if a job board posting URL is no longer listed. Undefined if the URL belongs to no known board, or if the
+ * embedded posting is not found, because its board is guessed from the host name.
  */
 export async function listedOpening(url: string, signal: AbortSignal) {
   const direct = postingAddress(url);
   const address = direct ?? embeddedGreenhouseAddress(url);
   if (!address) return undefined;
+  const notListed = direct ? null : undefined;
   try {
     const openings = await PROVIDERS[address.provider](address.slug, signal);
     const id = address.id.toLowerCase();
-    return openings.find((opening) => opening.id.toLowerCase() === id) ?? null;
+    return openings.find((o) => o.id.toLowerCase() === id) ?? notListed;
   } catch (error) {
     if (!(error instanceof BoardNotFound)) throw error;
-    return direct ? null : undefined;
+    return notListed;
   }
 }

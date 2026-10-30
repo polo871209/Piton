@@ -1,6 +1,6 @@
+import { env } from "cloudflare:workers";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { UserInput } from "@earendil-works/pi-durable";
-import { env } from "cloudflare:workers";
 import { type Message, telegram } from "./api";
 
 const MAX_DOWNLOAD_BYTES = 20_000_000;

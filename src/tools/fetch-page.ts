@@ -1,6 +1,6 @@
+import { env } from "cloudflare:workers";
 import { Type } from "@earendil-works/pi-ai";
 import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
-import { env } from "cloudflare:workers";
 import { listedOpening } from "../job-boards";
 import {
   closureNotice,
@@ -11,12 +11,11 @@ import {
   visibleText,
 } from "../liveness";
 import { callParallel } from "../parallel";
+import { BROWSER_USER_AGENT, pageKey, withTimeout } from "../web";
 
 const MAX_PAGE_CHARS = 20_000;
 const LIVE_TIMEOUT_MS = 15_000;
 const CACHE_TIMEOUT_MS = 25_000;
-const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const CURRENCY = String.raw`RM|MYR|S\$|SGD|US\$|USD|\$|€|EUR|£|GBP`;
 const AMOUNT = String.raw`(\d[\d,]*(?:\.\d+)?)\s?(k\b)?`;
 const SALARY = new RegExp(
@@ -82,7 +81,7 @@ async function checkLive(url: string, signal: AbortSignal): Promise<Checked> {
     };
   }
   const response = await fetch(url, {
-    headers: { "user-agent": USER_AGENT },
+    headers: { "user-agent": BROWSER_USER_AGENT },
     signal,
   });
   const html = response.ok ? await response.text() : "";
@@ -143,11 +142,6 @@ function pageStatus(
   return { kind: "live", onBoard: false, page };
 }
 
-const withTimeout = (abort: AbortSignal | undefined, ms: number) =>
-  abort
-    ? AbortSignal.any([abort, AbortSignal.timeout(ms)])
-    : AbortSignal.timeout(ms);
-
 async function cachedPages(
   urls: string[],
   objective: string,
@@ -161,12 +155,8 @@ async function cachedPages(
       conversationId,
       withTimeout(abort, CACHE_TIMEOUT_MS),
     );
-    const byUrl = new Map(results.map((page) => [page.url, page]));
-    return urls.map(
-      (url, i) =>
-        byUrl.get(url) ??
-        (results.length === urls.length ? results[i] : undefined),
-    );
+    const byPage = new Map(results.map((page) => [pageKey(page.url), page]));
+    return urls.map((url) => byPage.get(pageKey(url)));
   } catch (error) {
     if (abort?.aborted) throw error;
     return [];

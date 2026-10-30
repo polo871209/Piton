@@ -1,6 +1,5 @@
 import type { ConversationId } from "@earendil-works/pi-durable";
-
-export class TransientError extends Error {}
+import { assertOk } from "./web";
 
 type McpReply = {
   result?: { content?: { type: string; text?: string }[]; isError?: boolean };
@@ -49,10 +48,7 @@ export async function callParallel<Result>(
     }),
     signal,
   });
-  if (response.status === 429 || response.status >= 500) {
-    throw new TransientError(`HTTP ${response.status}`);
-  }
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  assertOk(response);
   const body = await response.text();
   const reply = JSON.parse(eventStreamData(body) ?? body) as McpReply;
   if (reply.error) throw new Error(reply.error.message ?? "unknown error");

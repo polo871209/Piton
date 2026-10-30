@@ -1,19 +1,20 @@
 import { Type } from "@earendil-works/pi-ai";
 import { type ConversationId, defineTool } from "@earendil-works/pi-durable";
-import { callParallel, TransientError } from "../parallel";
+import { errorText } from "../errors";
+import { callParallel } from "../parallel";
+import {
+  assertOk,
+  BROWSER_USER_AGENT,
+  pageKey,
+  TransientError,
+  withTimeout,
+} from "../web";
 
 const RESULT_LIMIT = 5;
 const SNIPPET_CHARS = 1_000;
 const PROVIDER_TIMEOUT_MS = 20_000;
 
 type SearchResult = { title: string; url: string; content: string };
-
-function assertOk(response: Response) {
-  if (response.status === 429 || response.status >= 500) {
-    throw new TransientError(`HTTP ${response.status}`);
-  }
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-}
 
 function isTransient(error: unknown) {
   return (
@@ -48,15 +49,18 @@ async function parallelSearch(
   );
 }
 
+const codePoint = (entity: string, code: number) =>
+  code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+
 function decodeEntities(text: string) {
   return text
     .replace(/&nbsp;/g, " ")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-      String.fromCodePoint(Number.parseInt(code, 16)),
+    .replace(/&#(\d+);/g, (entity, code) => codePoint(entity, Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (entity, code) =>
+      codePoint(entity, Number.parseInt(code, 16)),
     )
     .replace(/&amp;/g, "&");
 }
@@ -69,8 +73,7 @@ async function duckDuckGoSearch(query: string, signal: AbortSignal) {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
-      "user-agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "user-agent": BROWSER_USER_AGENT,
     },
     body: new URLSearchParams({ q: query }),
     signal,
@@ -112,17 +115,6 @@ const PROVIDERS = [
   { name: "DuckDuckGo", search: duckDuckGoSearch, attempts: 1 },
 ];
 
-const TRACKING_PARAMETER = /^(utm_|gclid$|fbclid$|mc_|ref$|source$)/i;
-
-function pageKey(raw: string) {
-  const url = new URL(raw);
-  for (const name of [...url.searchParams.keys()]) {
-    if (TRACKING_PARAMETER.test(name)) url.searchParams.delete(name);
-  }
-  const host = url.hostname.toLowerCase().replace(/^www\./, "");
-  return `${host}${url.pathname.replace(/\/+$/, "")}${url.search}`;
-}
-
 function uniqueResults(results: SearchResult[]) {
   const seen = new Set<string>();
   return results.filter((result) => {
@@ -140,13 +132,13 @@ async function searchWithRetry(
   callerSignal: AbortSignal | undefined,
 ) {
   for (let attempt = 1; ; attempt++) {
-    const timeout = AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
-    const signal = callerSignal
-      ? AbortSignal.any([callerSignal, timeout])
-      : timeout;
     try {
       return uniqueResults(
-        await provider.search(query, signal, conversationId),
+        await provider.search(
+          query,
+          withTimeout(callerSignal, PROVIDER_TIMEOUT_MS),
+          conversationId,
+        ),
       );
     } catch (error) {
       if (attempt >= provider.attempts || !isTransient(error)) throw error;
@@ -189,8 +181,7 @@ export const webSearchTool = defineTool({
         failures.push(`${provider.name}: no results`);
       } catch (error) {
         if (context.abortSignal?.aborted) throw error;
-        const message = error instanceof Error ? error.message : String(error);
-        failures.push(`${provider.name}: ${message}`);
+        failures.push(`${provider.name}: ${errorText(error)}`);
       }
     }
     return {

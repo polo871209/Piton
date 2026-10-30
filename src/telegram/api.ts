@@ -1,5 +1,5 @@
-import { Api, GrammyError } from "grammy/web";
 import type { BotCommand, InlineKeyboardMarkup } from "grammy/types";
+import { Api, GrammyError } from "grammy/web";
 
 export type { BotCommand, Message, Update, User } from "grammy/types";
 

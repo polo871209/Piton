@@ -13,8 +13,6 @@ const STATUSES = [
 ] as const;
 type RoleStatus = (typeof STATUSES)[number];
 
-const LINKED_STATUSES: RoleStatus[] = ["sent"];
-const COUNTED_STATUSES: RoleStatus[] = ["closed"];
 const JOB_ID_PARAMS = /^(?:gh_jid|jid|id|jobid|job_id|job|req|reqid)$/i;
 
 type TrackedRole = {
@@ -61,12 +59,12 @@ function describeRoles(roles: readonly TrackedRole[]) {
       .filter((role) => role.status === status)
       .sort((a, b) => b.updatedAt - a.updatedAt);
     if (group.length === 0) return [];
-    if (COUNTED_STATUSES.includes(status)) {
+    if (status === "closed") {
       return [`${status} (${group.length}): not listed.`];
     }
     const lines = group.map(
       (role) =>
-        `- ${role.company}, ${role.title} (${day(role.updatedAt)})${role.note ? `: ${role.note}` : ""}${LINKED_STATUSES.includes(status) ? ` ${role.url}` : ""}`,
+        `- ${role.company}, ${role.title} (${day(role.updatedAt)})${role.note ? `: ${role.note}` : ""}${status === "sent" ? ` ${role.url}` : ""}`,
     );
     return [`${status} (${group.length}):`, ...lines];
   });

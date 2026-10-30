@@ -1,16 +1,15 @@
 import type { Context } from "@earendil-works/chord";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-  configure,
   type ConversationId,
+  configure,
   defineTask,
   type EntryId,
   type TaskRuntime,
   type Tx,
   type UserInput,
 } from "@earendil-works/pi-durable";
-import { type BotKey, ChatBot, type ChatTarget } from "../telegram/bots";
 import { sendReply } from "../telegram/api";
+import { type BotKey, ChatBot, type ChatTarget } from "../telegram/bots";
 import type { DraftStreams } from "../telegram/drafts";
 import { AGENT } from "./model";
 
@@ -46,11 +45,14 @@ async function answerText(
   context: Context,
 ) {
   const entry = await runtime.entry(answer, context);
-  const message = entry?.model?.[0] as AssistantMessage | undefined;
-  const text = message?.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n")
-    .trim();
+  const message = entry?.model?.[0];
+  const text =
+    message?.role === "assistant"
+      ? message.content
+          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .join("\n")
+          .trim()
+      : "";
   return text || "(empty answer)";
 }
 

@@ -1,3 +1,4 @@
+import { errorText } from "./errors";
 import { registerBot, sendReply, type Update } from "./telegram/api";
 import type { BotKey } from "./telegram/bots";
 import { MASTER_COMMANDS } from "./telegram/commands";
@@ -60,7 +61,7 @@ export default {
       await env.PITON.getByName("owner").handleUpdate(update, bot, origin);
     } catch (error) {
       // Telegram retries a failed update before every later one, so one bad update would block the chat.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorText(error);
       console.error("Dropped Telegram update", bot, update.update_id, message);
       await sendReply(
         env.TELEGRAM_BOT_TOKEN,

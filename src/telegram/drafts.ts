@@ -7,7 +7,7 @@ import {
   type JsonObject,
   watchEvents,
 } from "@earendil-works/pi-durable";
-import { GrammyError, HttpError } from "grammy/web";
+import { errorText } from "../errors";
 import { sendDraft } from "./api";
 
 // Each draft is a subrequest, and Workers Free allows 50 per invocation.
@@ -59,6 +59,12 @@ function stepLabel(toolName: string, args: JsonObject) {
       return "Listing jobs";
     case "cancel_job":
       return "Cancelling a job";
+    case "job_tracker":
+      return "Job tracker";
+    case "photo_frame":
+      return `Photo frame${detail(text("action"))}`;
+    case "tool_search":
+      return "Loading a tool";
     default:
       return escapeMarkdown(toolName);
   }
@@ -92,16 +98,6 @@ function renderThinking(thinking: string) {
       ? `…${paragraph.slice(-THINKING_TAIL_CHARS)}`
       : paragraph;
   return tail ? `> ${escapeMarkdown(tail.replace(/\s+/g, " "))}` : "";
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof HttpError)
-    return `${error.message}: ${errorText(error.error)}`;
-  if (error instanceof GrammyError)
-    return `${error.error_code} ${error.description}`;
-  return error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : String(error);
 }
 
 let lastDraftId = Date.now() % 2 ** 30;

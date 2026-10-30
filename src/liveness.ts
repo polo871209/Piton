@@ -114,20 +114,25 @@ export function jobPostingFacts(html: string): PostingFacts {
       return {
         postedOn: isoDay(posting.datePosted),
         closesOn: isoDay(posting.validThrough),
-        employer: posting.hiringOrganization?.name?.trim() || undefined,
+        employer: employerName(posting.hiringOrganization),
       };
     }
   }
   return {};
 }
 
-type JobPosting = {
-  datePosted?: string;
-  validThrough?: string;
-  hiringOrganization?: { name?: string };
-};
+type JsonLdNode = Record<string, unknown>;
 
-function findJobPosting(data: unknown): JobPosting | undefined {
+function employerName(organization: unknown): string | undefined {
+  const first = [organization].flat()[0];
+  const name =
+    typeof first === "object" && first !== null
+      ? (first as JsonLdNode).name
+      : first;
+  return typeof name === "string" ? name.trim() || undefined : undefined;
+}
+
+function findJobPosting(data: unknown): JsonLdNode | undefined {
   if (Array.isArray(data)) {
     for (const item of data) {
       const found = findJobPosting(item);
@@ -136,14 +141,14 @@ function findJobPosting(data: unknown): JobPosting | undefined {
     return undefined;
   }
   if (typeof data !== "object" || data === null) return undefined;
-  const node = data as { "@type"?: unknown; "@graph"?: unknown };
+  const node = data as JsonLdNode;
   const types = [node["@type"]].flat();
-  if (types.includes("JobPosting")) return node as JobPosting;
+  if (types.includes("JobPosting")) return node;
   return findJobPosting(node["@graph"]);
 }
 
-function isoDay(value: string | undefined) {
-  if (!value) return undefined;
+function isoDay(value: unknown) {
+  if (typeof value !== "string" || !value) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? undefined

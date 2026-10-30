@@ -12,6 +12,7 @@ import {
   type Provider,
 } from "../job-boards";
 import { formatLocal } from "../time";
+import { withTimeout } from "../web";
 
 const MAX_LISTED = 30;
 
@@ -80,10 +81,10 @@ async function firstBoardFound(boards: Board[], signal: AbortSignal) {
 
 async function findBoard(
   board: string,
+  direct: Board | undefined,
   known: Board | undefined,
   signal: AbortSignal,
 ) {
-  const direct = boardFromUrl(board);
   if (direct) return firstBoardFound([direct], signal);
   if (known) {
     const found = await firstBoardFound([known], signal);
@@ -121,7 +122,8 @@ function matches(opening: Opening, filter: string, exclude: string) {
   );
 }
 
-const words = (text: string) => text.toLowerCase().split(/\s+/).filter(Boolean);
+const words = (phrase: string) =>
+  phrase.toLowerCase().split(/\s+/).filter(Boolean);
 
 const describeOpening = (o: Opening, isNew: boolean) =>
   `${isNew ? "NEW " : ""}${o.title}${o.location ? ` (${o.location})` : ""}${o.postedOn ? `, posted ${o.postedOn}` : ""} ${o.url}`;
@@ -130,6 +132,14 @@ const newestFirst = (a: Opening, b: Opening) =>
   (b.postedOn ?? "").localeCompare(a.postedOn ?? "");
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
+
+type Check = {
+  output: string;
+  seenKey: string;
+  seenIds: string[];
+  checkedAt: number;
+  knownBoard?: { name: string; board: Board };
+};
 
 export const companyJobsTool = defineTool({
   name: "company_jobs",
@@ -167,16 +177,26 @@ export const companyJobsTool = defineTool({
     api,
     context,
   ) {
-    const earlier = await api.memo<string>("output", context);
-    if (earlier !== undefined) return { output: text(earlier) };
+    const commitCheck = async (saved: Check) => {
+      await api.commit(async (tx) => {
+        const seen = await tx.doc(SeenOpenings, saved.seenKey, null);
+        seen.ids = saved.seenIds;
+        seen.checkedAt = saved.checkedAt;
+        if (saved.knownBoard) {
+          (await tx.doc(KnownBoards)).boards[saved.knownBoard.name] =
+            saved.knownBoard.board;
+        }
+      }, context);
+      return { output: text(saved.output) };
+    };
+    const earlier = await api.memo<Check>("check", context);
+    if (earlier !== undefined) return commitCheck(earlier);
 
-    const signal = AbortSignal.any([
-      AbortSignal.timeout(30_000),
-      ...(context.abortSignal ? [context.abortSignal] : []),
-    ]);
+    const signal = withTimeout(context.abortSignal, 30_000);
     const name = board.trim().toLowerCase();
+    const direct = boardFromUrl(board);
     const known = (await api.snapshot(KnownBoards, context))?.boards[name];
-    const found = await findBoard(board, known, signal);
+    const found = await findBoard(board, direct, known, signal);
     if (!found) {
       return {
         output: text(
@@ -231,19 +251,13 @@ export const companyJobsTool = defineTool({
                 "; ",
               )}${older.length > MAX_LISTED ? `; and ${older.length - MAX_LISTED} more` : ""}. Set all to list them with links.`,
           ];
-    const output = await api.memo(
-      "output",
-      [header, ...lines, ...more, ...stillOpen].join("\n"),
-      context,
-    );
-    await api.commit(async (tx) => {
-      const doc = await tx.doc(SeenOpenings, key, null);
-      doc.ids = openings.map((o) => o.id);
-      doc.checkedAt = Date.now();
-      if (!boardFromUrl(board)) {
-        (await tx.doc(KnownBoards)).boards[name] = { provider, slug };
-      }
-    }, context);
-    return { output: text(output) };
+    const check: Check = {
+      output: [header, ...lines, ...more, ...stillOpen].join("\n"),
+      seenKey: key,
+      seenIds: openings.map((o) => o.id),
+      checkedAt: api.now(),
+      ...(direct ? {} : { knownBoard: { name, board: { provider, slug } } }),
+    };
+    return commitCheck(await api.memo("check", check, context));
   },
 });

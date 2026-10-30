@@ -46,9 +46,9 @@ export function formatLocal(timestamp: number, timezone: string) {
 }
 
 export function zonedTime(wallClock: number, timezone: string) {
-  const offsetAt = (instant: number) => {
-    const p = localParts(instant, timezone);
-    const minute = Math.floor(instant / 60_000) * 60_000;
+  const offsetAt = (at: number) => {
+    const p = localParts(at, timezone);
+    const minute = Math.floor(at / 60_000) * 60_000;
     return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) - minute;
   };
   const instant = wallClock - offsetAt(wallClock - offsetAt(wallClock));

@@ -24,5 +24,4 @@ Single-owner assistant on Telegram, built on [Pi Durable](https://github.com/ear
 - To test egress from Cloudflare, such as whether a site blocks Workers, run a scratch Worker with `wrangler dev --remote`. Local `wrangler dev` uses your own IP.
 - To read the deployed chat history, run `pnpm history` to list conversations, then `pnpm history <id>` for one transcript. It refreshes `.wrangler/history.sqlite` for your own SQL queries.
 - To test the deployed bot, use the `telegram` MCP server. It acts as the owner in the chat with `@pitonguide_bot`.
-- After a change to `wrangler.jsonc`, run `pnpm types`. Done means `pnpm typecheck` passes.
-
+- After a change to `wrangler.jsonc`, run `pnpm types`. Done means `pnpm typecheck` and `pnpm lint` pass. `pnpm format` fixes formatting, import order, and safe lint fixes.

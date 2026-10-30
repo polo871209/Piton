@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-durable";
 import { describeJob, type Job, Jobs, listJobs, nextRunAt } from "../jobs";
-import { type BotKey, ChatBot } from "../telegram/bots";
+import { ChatBot } from "../telegram/bots";
 import { WEEKDAYS } from "../time";
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
@@ -23,6 +23,7 @@ export const scheduleJobTool = defineTool({
     }),
     days: Type.Optional(
       Type.Array(Type.Union(WEEKDAYS.map((day) => Type.Literal(day))), {
+        uniqueItems: true,
         description: "Omit for every day.",
       }),
     ),
@@ -40,8 +41,8 @@ export const scheduleJobTool = defineTool({
     } catch {
       return { output: text(`Unknown timezone: ${timezone}`), isError: true };
     }
-    const chat = await api.snapshot(ChatBot, api.conversationId, context);
-    if (!chat?.bot) throw new Error("This chat has no bot");
+    const bot = (await api.snapshot(ChatBot, api.conversationId, context))?.bot;
+    if (!bot) throw new Error("This chat has no bot");
     const id = await api.memo(
       "job-id",
       crypto.randomUUID().slice(0, 8),
@@ -56,7 +57,7 @@ export const scheduleJobTool = defineTool({
         ...recurrence,
         id,
         conversationId: api.conversationId,
-        bot: chat.bot as BotKey,
+        bot,
         instruction: args.task,
         nextRunAt: nextRunAt(recurrence, Date.now()),
       };

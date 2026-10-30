@@ -1,25 +1,24 @@
 import { DurableObject } from "cloudflare:workers";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
-import type { InlineKeyboardMarkup } from "grammy/types";
 import {
   type ConversationId,
-  type UserInput,
   createRegistry,
   defineExtension,
   Harness,
   ROOT_CONVERSATION_ID,
   section,
   type TaskId,
+  type UserInput,
 } from "@earendil-works/pi-durable";
 import { openDurableObjectSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/cloudflare";
+import type { InlineKeyboardMarkup } from "grammy/types";
 import { PiCredentialStore } from "./agent/credentials";
 import { createPitonModels, PROVIDER } from "./agent/model";
 import { assistantInstructions, MASTER_INSTRUCTIONS } from "./agent/prompts";
 import { createTurnTask, LOGIN_HINT, queueTurn } from "./agent/turn";
-
+import { errorText } from "./errors";
 import { Jobs, listJobs, nextRunAt } from "./jobs";
-import { messageInput } from "./telegram/attachments";
 import {
   type Message,
   registerBot,
@@ -28,6 +27,7 @@ import {
   type Update,
   type User,
 } from "./telegram/api";
+import { messageInput } from "./telegram/attachments";
 import {
   Assistants,
   type BotKey,
@@ -54,19 +54,6 @@ const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const LOGIN_KEEPALIVE_MS = 30_000;
 const RECOVERY_ALARM_DELAY_MS = 60_000;
 
-const kualaLumpurClock = new Intl.DateTimeFormat("sv-SE", {
-  timeZone: "Asia/Kuala_Lumpur",
-  dateStyle: "short",
-  timeStyle: "short",
-});
-
-function errorText(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
-  return error.cause === undefined
-    ? error.message
-    : `${error.message}: ${errorText(error.cause)}`;
-}
-
 export class Piton extends DurableObject<Env> {
   #harness!: Harness;
   #models!: MutableModels;
@@ -88,6 +75,16 @@ export class Piton extends DurableObject<Env> {
   async #initialize() {
     const models = createPitonModels(this.#credentials);
     this.#models = models;
+    const timezone = this.env.OWNER_TIMEZONE;
+    const ownerClock = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: timezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "shortOffset",
+    });
 
     const extension = defineExtension({
       name: "piton",
@@ -97,7 +94,7 @@ export class Piton extends DurableObject<Env> {
         section(
           "clock",
           () =>
-            `Current time: ${kualaLumpurClock.format(new Date())} in Kuala Lumpur (UTC+8). The owner lives there, so give times in UTC+8.`,
+            `Current time: ${ownerClock.format(new Date())}, in ${timezone}. The owner lives there, so give times in that timezone.`,
           { tag: false },
         ),
         LOADABLE_TOOLS,
@@ -148,24 +145,25 @@ export class Piton extends DurableObject<Env> {
     const due = doc?.jobs.filter((job) => job.nextRunAt <= now) ?? [];
     if (due.length === 0) return;
     const owner = Number(this.env.TELEGRAM_OWNER_ID);
-    const instructions = new Map(
+    const instructionsByJob = new Map(
       await Promise.all(
         due.map(
           async (job) =>
-            [job.bot, await this.#instructionsFor(job.bot)] as const,
+            [job.id, await this.#instructionsFor(job.bot)] as const,
         ),
       ),
     );
     await this.#harness.commit(async (tx) => {
       const jobs = (await tx.doc(Jobs)).jobs;
       for (const job of jobs) {
-        if (job.nextRunAt > now) continue;
+        const instructions = instructionsByJob.get(job.id);
+        if (instructions === undefined || job.nextRunAt > now) continue;
         await queueTurn(tx, this.#turnTask, {
           conversationId: job.conversationId as ConversationId,
           requestId: `job:${job.id}:${job.nextRunAt}`,
           content: `Scheduled job ${job.id} is due. Do this now, then reply with the result in at most 5 lines: ${job.instruction}`,
           target: { bot: job.bot, chatId: owner },
-          instructions: instructions.get(job.bot) ?? "",
+          instructions,
         });
         job.nextRunAt = nextRunAt(job, now);
       }
@@ -297,7 +295,14 @@ export class Piton extends DurableObject<Env> {
         );
         return;
       default: {
-        const input = await messageInput(await this.#tokenFor(bot), message);
+        let input: UserInput | undefined;
+        try {
+          input = await messageInput(await this.#tokenFor(bot), message);
+        } catch (error) {
+          await this.#markHandled(bot, update.update_id);
+          await this.#reply(bot, chatId, errorText(error));
+          return;
+        }
         if (input === undefined) {
           await this.#markHandled(bot, update.update_id);
           await this.#reply(bot, chatId, "I read text, photos, and files.");
@@ -430,7 +435,9 @@ export class Piton extends DurableObject<Env> {
     }
     const code = Promise.withResolvers<string>();
     this.#submitLoginCode = code.resolve;
-    void this.#completeLogin(chatId, code.promise);
+    void this.#completeLogin(chatId, code.promise).catch((error: unknown) =>
+      console.error("Login cleanup failed", errorText(error)),
+    );
   }
 
   async #completeLogin(chatId: number, code: Promise<string>) {
@@ -439,8 +446,8 @@ export class Piton extends DurableObject<Env> {
       AbortSignal.timeout(LOGIN_TIMEOUT_MS),
       failed.signal,
     ]);
-    await this.#refreshAlarm();
     try {
+      await this.#refreshAlarm();
       await this.#models.login(PROVIDER, "oauth", {
         signal,
         prompt: async (prompt) =>
